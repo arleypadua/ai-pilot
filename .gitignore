@@ -5,3 +5,7 @@ dist/
 *.log
 .DS_Store
 coverage/
+
+# Agent Auto-Pilot runtime state & worktrees
+.autopilot/*
+!.autopilot/config.json

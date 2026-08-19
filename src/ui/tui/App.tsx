@@ -62,6 +62,10 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
     // 1. Actively executing workers
     for (const worker of activeWorkersMap.values()) {
       renderedIssues.add(worker.issueNumber);
+      const session = orchestrator.getStateManager().getSession(worker.issueNumber);
+      const node = dag ? dag.getNode(worker.issueNumber) : undefined;
+      const runnerName = worker.runnerName || session?.metadata?.runner || node?.runnerName || config.runner;
+
       list.push({
         issueNumber: worker.issueNumber,
         title: worker.title,
@@ -69,6 +73,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
         status: worker.status,
         startedAt: worker.startedAt,
         isWip: false,
+        runnerName,
       });
     }
 
@@ -79,12 +84,17 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
         const node = dag ? dag.getNode(wt.issueNumber) : undefined;
         if (node && node.issue.state === 'OPEN') {
           renderedIssues.add(wt.issueNumber);
-          const isPaused = Boolean(quotaStatus?.isPaused || quotaStatus?.rollingStats?.isApproachingLimit);
-          let status: TaskStatus = isPaused ? 'paused_quota' : 'pending';
-          if (node.status === 'waiting_feedback') {
+          const session = orchestrator.getStateManager().getSession(wt.issueNumber);
+          const runnerName = node.runnerName || session?.metadata?.runner || config.runner;
+          const isRunnerPaused = orchestrator.getQuotaMonitor().isRunnerPaused(runnerName);
+
+          let status: TaskStatus = 'pending';
+          if (node.status === 'waiting_feedback' || session?.metadata?.status === 'waiting_feedback') {
             status = 'waiting_feedback';
           } else if (node.status === 'blocked') {
             status = 'blocked';
+          } else if (isRunnerPaused) {
+            status = 'paused_quota';
           }
 
           list.push({
@@ -93,6 +103,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
             branchName: wt.branch,
             status,
             isWip: true,
+            runnerName,
           });
         }
       }

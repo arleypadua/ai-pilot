@@ -12,6 +12,7 @@ export interface ActiveWorker {
   status: TaskStatus;
   startedAt: Date;
   lastOutput?: string;
+  runnerName?: string;
 }
 
 export class Dashboard {
@@ -78,21 +79,34 @@ export class Dashboard {
     // Header Banner
     console.log(
       pc.bold(pc.bgCyan(pc.black(' ⚡ AGENT AUTO-PILOT '))) +
-        pc.cyan(repoContext + specContext + ` | Runner: ${this.config.runner} (/implement) | `) +
+        pc.cyan(repoContext + specContext + ` | Default Runner: ${this.config.runner} | `) +
         `Concurrency: ${this.activeWorkers.size}/${this.config.maxConcurrency}`
     );
 
-    // Quota Status Banner & Live Usage Telemetry from Claude CLI
+    // Quota Status Banner & Live Usage Telemetry from Claude / AGY CLI
     if (quotaStatus.isPaused && quotaStatus.resetAt) {
       const remainingMs = Math.max(0, quotaStatus.resetAt.getTime() - Date.now());
       const remainingMins = Math.ceil(remainingMs / (60 * 1000));
       console.log(
-        pc.bgRed(pc.white(pc.bold(' ⏳ 5-HOUR QUOTA PAUSED '))) +
+        pc.bgRed(pc.white(pc.bold(` ⏳ ${quotaStatus.pausedRunner ? quotaStatus.pausedRunner.toUpperCase() + ' ' : ''}5-HOUR QUOTA PAUSED `))) +
           pc.red(` Resumes at ${quotaStatus.resetAt.toLocaleTimeString()} (~${remainingMins} min remaining)`)
       );
     }
 
-    if (quotaStatus.liveUsage) {
+    if (quotaStatus.runnerUsage && Object.keys(quotaStatus.runnerUsage).length > 0) {
+      for (const rUsage of Object.values(quotaStatus.runnerUsage)) {
+        const header = pc.bold(pc.cyan(`● ${rUsage.displayName}:`));
+        const bucketStrs = rUsage.buckets.map((b) => {
+          const barLen = 10;
+          const filled = Math.min(barLen, Math.round((b.usedPercentage / 100) * barLen));
+          const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, barLen - filled));
+          const color = b.usedPercentage >= 95 ? pc.red : b.usedPercentage >= 80 ? pc.yellow : pc.green;
+          const resetPart = b.resetText ? ` (resets ${b.resetText})` : '';
+          return color(`${b.name}: [${bar}] ${b.usedPercentage}% used${resetPart}`);
+        });
+        console.log(`${header} ${bucketStrs.join('  •  ')}`);
+      }
+    } else if (quotaStatus.liveUsage) {
       const live = quotaStatus.liveUsage;
       const sessPct = live.sessionUsedPercentage;
       const barLen = 12;
@@ -119,25 +133,8 @@ export class Dashboard {
         }
         console.log(weekLine);
       }
-    } else if (quotaStatus.rollingStats) {
-      const stats = quotaStatus.rollingStats;
-      const pct = Math.round(stats.utilization * 100);
-      const usedK = Math.round(stats.totalOutputTokens / 1000);
-      const capK = Math.round(stats.estimatedCeiling / 1000);
-
-      const barLen = 12;
-      const filled = Math.min(barLen, Math.round((pct / 100) * barLen));
-      const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, barLen - filled));
-
-      let meterColor = pc.green;
-      if (pct >= 85) meterColor = pc.red;
-      else if (pct >= 70) meterColor = pc.yellow;
-
-      console.log(
-        meterColor(`● 5h Rolling Quota: [${bar}] ${pct}% (${usedK}k / ${capK}k output tokens)`)
-      );
     } else {
-      console.log(pc.green('● Quota Status: Normal (5h window healthy)'));
+      console.log(pc.green('● Quota Status: Normal (headroom healthy)'));
     }
     console.log('');
 
@@ -145,12 +142,13 @@ export class Dashboard {
     const workerTable = new Table({
       head: [
         pc.cyan('Issue'),
+        pc.cyan('Runner'),
         pc.cyan('Title'),
         pc.cyan('Branch'),
         pc.cyan('Status'),
         pc.cyan('Elapsed'),
       ],
-      colWidths: [10, 32, 28, 18, 14],
+      colWidths: [10, 10, 28, 24, 16, 12],
     });
 
     const renderedIssueNumbers = new Set<number>();
@@ -166,8 +164,9 @@ export class Dashboard {
 
       workerTable.push([
         `#${worker.issueNumber}`,
-        worker.title.slice(0, 30),
-        worker.branchName.slice(0, 26),
+        pc.cyan(worker.runnerName || this.config.runner),
+        worker.title.slice(0, 26),
+        worker.branchName.slice(0, 22),
         statusStr,
         this.formatDuration(worker.startedAt),
       ]);
@@ -179,18 +178,23 @@ export class Dashboard {
         const node = dag.getNode(wt.issueNumber);
         if (node && node.issue.state === 'OPEN') {
           renderedIssueNumbers.add(wt.issueNumber);
-          const isPaused = quotaStatus.isPaused || quotaStatus.rollingStats?.isApproachingLimit;
-          let statusStr = isPaused ? pc.yellow('⏳ paused (quota)') : pc.cyan('⏳ waiting (WIP)');
+          const runnerName = node.runnerName || this.config.runner;
+          const isRunnerPaused = quotaStatus.pausedRunners ? Boolean(quotaStatus.pausedRunners[runnerName]) : quotaStatus.isPaused;
+
+          let statusStr = pc.cyan('⏳ waiting (WIP)');
           if (node.status === 'waiting_feedback') {
             statusStr = pc.magenta('👀 in review');
           } else if (node.status === 'blocked') {
             statusStr = pc.gray('⏳ blocked');
+          } else if (isRunnerPaused) {
+            statusStr = pc.yellow('⏳ paused (quota)');
           }
 
           workerTable.push([
             `#${wt.issueNumber}`,
-            node.issue.title.slice(0, 30),
-            wt.branch.slice(0, 26),
+            pc.cyan(node.runnerName || this.config.runner),
+            node.issue.title.slice(0, 26),
+            wt.branch.slice(0, 22),
             statusStr,
             pc.gray('preserves WIP'),
           ]);
@@ -200,7 +204,7 @@ export class Dashboard {
 
     if (renderedIssueNumbers.size === 0) {
       workerTable.push([
-        { colSpan: 5, content: pc.gray('No active agent workers running (Idle)') },
+        { colSpan: 6, content: pc.gray('No active agent workers running (Idle)') },
       ]);
     }
 

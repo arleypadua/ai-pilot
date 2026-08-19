@@ -5,6 +5,7 @@ import pc from 'picocolors';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import * as readline from 'node:readline/promises';
 import { execa } from 'execa';
 import { loadConfig, saveConfig, detectRepository, getConfigPath, parseSpecsOption } from './config/schema.js';
 import { Orchestrator } from './pipeline/orchestrator.js';
@@ -12,6 +13,7 @@ import { GitHubClient } from './github/client.js';
 import { IssueDAG } from './github/dag.js';
 import { WorktreeManager } from './worktree/manager.js';
 import { StateManager } from './state/manager.js';
+import { isBinaryAvailable } from './runners/base.js';
 import type { DAGNode, GitHubLabel } from './types/index.js';
 import Table from 'cli-table3';
 
@@ -101,17 +103,65 @@ program
   .command('init')
   .description('Initialize .autopilot/config.json for the current project')
   .option('-r, --repo <owner/repo>', 'GitHub repository')
+  .option('--runner <runner>', 'Default runner to configure (e.g. claude, agy)')
   .action(async (options) => {
     try {
       const detectedRepo = options.repo || (await detectRepository());
+
+      let selectedRunner = options.runner;
+      if (!selectedRunner) {
+        const hasClaude = await isBinaryAvailable('claude');
+        const hasAgy = await isBinaryAvailable('agy');
+
+        if (hasClaude && !hasAgy) {
+          selectedRunner = 'claude';
+          console.log(pc.cyan('\n✓ Auto-detected runner: ') + pc.bold(pc.green('Claude Code CLI (claude)')) + pc.gray(' (only installed provider found)'));
+        } else if (hasAgy && !hasClaude) {
+          selectedRunner = 'agy';
+          console.log(pc.cyan('\n✓ Auto-detected runner: ') + pc.bold(pc.green('Antigravity CLI (agy)')) + pc.gray(' (only installed provider found)'));
+        } else if (process.stdin.isTTY) {
+          if (hasClaude && hasAgy) {
+            console.log(pc.cyan('\nMultiple LLM runners detected on your system:'));
+            console.log(`  ${pc.bold('1)')} Claude Code CLI (${pc.green('claude')}) [installed] [default]`);
+            console.log(`  ${pc.bold('2)')} Antigravity CLI (${pc.green('agy')}) [installed]`);
+          } else {
+            console.log(pc.yellow('\nNo supported runner CLIs (claude, agy) detected in PATH.'));
+            console.log(pc.cyan('Select the default LLM runner to configure:'));
+            console.log(`  ${pc.bold('1)')} Claude Code CLI (${pc.green('claude')}) [default]`);
+            console.log(`  ${pc.bold('2)')} Antigravity CLI (${pc.green('agy')})`);
+          }
+
+          const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
+
+          try {
+            const answer = await rl.question(pc.yellow('\nChoose runner [1/2 or name] (default: 1): '));
+            const trimmed = answer.trim().toLowerCase();
+            if (trimmed === '2' || trimmed === 'agy') {
+              selectedRunner = 'agy';
+            } else if (trimmed === '1' || trimmed === 'claude' || trimmed === '') {
+              selectedRunner = 'claude';
+            } else {
+              selectedRunner = trimmed;
+            }
+          } finally {
+            rl.close();
+          }
+        }
+      }
+
+      const runner = selectedRunner || 'claude';
+
       const config = {
         $schema: 'https://raw.githubusercontent.com/arleypadua/imagos/main/schema.json',
         repository: detectedRepo || 'owner/repo',
         baseBranch: 'main',
         maxConcurrency: 2,
         pollIntervalSeconds: 30,
-        extraPrompt: "",
-        runner: 'claude',
+        extraPrompt: '',
+        runner,
         autoMerge: true,
         mergeMethod: 'squash',
         cleanupWorktreeOnClose: true,
@@ -129,7 +179,8 @@ program
       };
 
       const savedPath = saveConfig(config as any);
-      console.log(pc.green(`✓ Created ${savedPath}`));
+      console.log(pc.green(`\n✓ Created ${savedPath}`));
+      console.log(pc.green(`✓ Configured default runner: ${pc.bold(runner)}`));
       console.log(pc.green('✓ Updated .gitignore (tracking config.json, ignoring runtime state/worktrees)'));
     } catch (err: any) {
       console.error(pc.red(`Failed to initialize config: ${err.message}`));
@@ -214,7 +265,7 @@ program
       // Issue DAG Table
       console.log(pc.bold('GitHub Issue DAG:'));
       const issueTable = new Table({
-        head: [pc.cyan('Issue'), pc.cyan('Title'), pc.cyan('Kind'), pc.cyan('Status'), pc.cyan('Blockers')],
+        head: [pc.cyan('Issue'), pc.cyan('Runner'), pc.cyan('Title'), pc.cyan('Kind'), pc.cyan('Status'), pc.cyan('Blockers')],
       });
 
       const displayNodes = targetSpecs.length > 0
@@ -238,7 +289,8 @@ program
 
         issueTable.push([
           `#${node.issue.number}`,
-          node.issue.title.slice(0, 30),
+          pc.cyan(node.runnerName || config.runner),
+          node.issue.title.slice(0, 26),
           node.kind,
           statusColor,
           node.blockers.length > 0 ? node.blockers.join(', ') : pc.gray('None'),
@@ -500,13 +552,14 @@ program
           console.log(pc.gray('  No issues ready for agent execution.\n'));
         } else {
           const table = new Table({
-            head: [pc.cyan('Issue'), pc.cyan('Title'), pc.cyan('Kind'), pc.cyan('Labels')],
-            colWidths: [10, 36, 14, 25],
+            head: [pc.cyan('Issue'), pc.cyan('Runner'), pc.cyan('Title'), pc.cyan('Kind'), pc.cyan('Labels')],
+            colWidths: [10, 12, 30, 14, 25],
           });
           for (const node of readyNodes) {
             table.push([
               `#${node.issue.number}`,
-              node.issue.title.slice(0, 34),
+              pc.cyan(node.runnerName || config.runner),
+              node.issue.title.slice(0, 28),
               node.kind,
               node.issue.labels.map((l) => l.name).join(', ').slice(0, 23),
             ]);

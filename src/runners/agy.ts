@@ -8,29 +8,10 @@ import { isBinaryAvailable } from './base.js';
 import { QuotaMonitor } from '../quota/monitor.js';
 import { AgentEventBus } from '../events/bus.js';
 
-export function findLatestClaudeSessionId(worktreePath: string): string | undefined {
-  try {
-    const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
-    if (!fs.existsSync(claudeProjectsDir)) return undefined;
-
-    const sanitizedPath = worktreePath.replace(/\//g, '-');
-    const projectDirs = fs.readdirSync(claudeProjectsDir);
-    const matchDir = projectDirs.find((d) => d.includes(path.basename(worktreePath)) || d === sanitizedPath);
-
-    if (matchDir) {
-      const fullMatchPath = path.join(claudeProjectsDir, matchDir);
-      const files = fs.readdirSync(fullMatchPath).filter((f) => f.endsWith('.jsonl'));
-      if (files.length > 0) {
-        const stats = files.map((f) => ({
-          file: f,
-          mtime: fs.statSync(path.join(fullMatchPath, f)).mtimeMs,
-        }));
-        stats.sort((a, b) => b.mtime - a.mtime);
-        return stats[0].file.replace(/\.jsonl$/, '');
-      }
-    }
-  } catch {}
-  return undefined;
+export interface AgyRunnerConfig {
+  model?: string;
+  effort?: 'low' | 'medium' | 'high' | string;
+  printTimeout?: string;
 }
 
 interface ActiveProcessInfo {
@@ -42,18 +23,20 @@ interface ActiveProcessInfo {
   watcher?: { stop: () => void };
 }
 
-export class ClaudeRunner implements AgentRunner {
-  public readonly name = 'claude';
+export class AgyRunner implements AgentRunner {
+  public readonly name = 'agy';
   private quotaMonitor?: QuotaMonitor;
   private activeProcesses: Map<number, ActiveProcessInfo> = new Map();
   private eventBus = AgentEventBus.getInstance();
+  private runnerConfig?: AgyRunnerConfig;
 
-  constructor(quotaMonitor?: QuotaMonitor) {
+  constructor(quotaMonitor?: QuotaMonitor, runnerConfig?: AgyRunnerConfig) {
     this.quotaMonitor = quotaMonitor;
+    this.runnerConfig = runnerConfig;
   }
 
   public async isAvailable(): Promise<boolean> {
-    return isBinaryAvailable('claude');
+    return isBinaryAvailable('agy');
   }
 
   public buildPrompt(context: TaskContext): string {
@@ -77,7 +60,7 @@ export class ClaudeRunner implements AgentRunner {
    - Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --squash --delete-branch\`) to close the issue.`;
 
     if (isContinuation && userFeedback) {
-      return `/implement ${issueRef}
+      return `Implement the requested task for ${issueRef}.
 
 You are continuing work on this task following clarification/steering from the developer.
 
@@ -94,9 +77,9 @@ ${guidelines}
     }
 
     if (isContinuation) {
-      return `/implement ${issueRef}
+      return `Implement the requested task for ${issueRef}.
 
-You are resuming work on this task after a session pause. Your previous conversation history, loaded files, and worktree state are restored.
+You are resuming work on this task after a session pause. Your previous conversation history and worktree state are preserved.
 
 ### Original Issue Description
 ${issue.body || 'No description provided.'}
@@ -105,7 +88,7 @@ ${guidelines}
 `;
     }
 
-    return `/implement ${issueRef}
+    return `Implement the requested task for ${issueRef}.
 
 ### Task Description
 ${issue.body || 'No description provided.'}
@@ -128,7 +111,6 @@ ${guidelines}
       detail: { prompt },
     });
 
-    // Wait if tool call is currently running (up to 5s) for graceful completion
     if (active.isExecutingTool) {
       this.eventBus.emitAgentEvent({
         issueNumber,
@@ -145,7 +127,7 @@ ${guidelines}
     try {
       active.subprocess.kill('SIGINT');
     } catch {
-      // Subprocess might already have exited
+      // Process may already have terminated
     }
 
     return true;
@@ -202,17 +184,26 @@ ${guidelines}
     ];
 
     if (context.isContinuation) {
-      const previousSessionId = findLatestClaudeSessionId(options.cwd);
-      if (previousSessionId) {
-        args.unshift('--resume', previousSessionId);
-      }
+      args.unshift('--continue');
+    }
+
+    if (this.runnerConfig?.model) {
+      args.push('--model', this.runnerConfig.model);
+    }
+
+    if (this.runnerConfig?.effort) {
+      args.push('--effort', this.runnerConfig.effort);
+    }
+
+    if (this.runnerConfig?.printTimeout) {
+      args.push('--print-timeout', this.runnerConfig.printTimeout);
     }
 
     let fullOutput = '';
     const issueNumber = options.issueNumber;
 
     try {
-      const subprocess = execa('claude', args, {
+      const subprocess = execa('agy', args, {
         cwd: options.cwd,
         stdin: 'ignore',
         env: {
@@ -227,14 +218,14 @@ ${guidelines}
         isExecutingTool: false,
       };
 
-      // Start watching Claude's project JSONL for real-time tool calls & thoughts
-      procInfo.watcher = this.startClaudeWatcher(options.cwd, issueNumber, procInfo);
+      // Start watching AGY transcript for real-time tool calls & thoughts
+      procInfo.watcher = this.startAgyWatcher(options.cwd, issueNumber, procInfo);
       this.activeProcesses.set(issueNumber, procInfo);
 
       if (subprocess.pid && options.onPid) {
         options.onPid(subprocess.pid);
         if (this.quotaMonitor) {
-          this.quotaMonitor.registerPid(subprocess.pid, 'claude');
+          this.quotaMonitor.registerPid(subprocess.pid, 'agy');
         }
       }
 
@@ -243,15 +234,25 @@ ${guidelines}
         fullOutput += text;
         if (options.onOutput) options.onOutput(text);
 
-        // Stream raw stdout lines to event bus
         const lines = text.split('\n').filter(Boolean);
         for (const line of lines) {
-          if (line.trim()) {
-            this.eventBus.emitAgentEvent({
-              issueNumber,
-              type: 'stdout',
-              summary: line.trim(),
-            });
+          const trimmed = line.trim();
+          if (trimmed) {
+            if (trimmed.startsWith('🔧') || trimmed.startsWith('Tool:')) {
+              procInfo.isExecutingTool = true;
+              this.eventBus.emitAgentEvent({
+                issueNumber,
+                type: 'tool_start',
+                summary: trimmed,
+              });
+            } else {
+              procInfo.isExecutingTool = false;
+              this.eventBus.emitAgentEvent({
+                issueNumber,
+                type: 'stdout',
+                summary: trimmed,
+              });
+            }
           }
         }
 
@@ -297,7 +298,6 @@ ${guidelines}
         this.quotaMonitor.unregisterPid(subprocess.pid);
       }
 
-      // Check if prompt was injected while running
       if (pendingPrompt) {
         return {
           success: false,
@@ -307,7 +307,6 @@ ${guidelines}
         };
       }
 
-      // Check if quota limit was met in output
       if (this.quotaMonitor) {
         const quotaCheck = this.quotaMonitor.checkOutputForRateLimit(fullOutput);
         if (quotaCheck.isRateLimited) {
@@ -315,7 +314,7 @@ ${guidelines}
             success: false,
             status: 'QUOTA_PAUSED',
             quotaResetAt: quotaCheck.resetAt,
-            summary: 'Execution paused due to 5-hour rolling quota limit.',
+            summary: 'Execution paused due to AGY quota limits.',
           };
         }
       }
@@ -346,7 +345,7 @@ ${guidelines}
             success: false,
             status: 'QUOTA_PAUSED',
             quotaResetAt: quotaCheck.resetAt,
-            summary: 'Execution paused due to Claude quota limits.',
+            summary: 'Execution paused due to AGY quota limits.',
           };
         }
       }
@@ -360,42 +359,74 @@ ${guidelines}
     }
   }
 
-  private startClaudeWatcher(
+  private startAgyWatcher(
     worktreePath: string,
     issueNumber: number,
     procInfo: ActiveProcessInfo
   ): { stop: () => void } {
     let lastLineCount = 0;
-    let currentFile: string | undefined;
+    let currentTranscriptPath: string | undefined;
+    const startTime = Date.now() - 5000;
+
+    const findTranscriptFile = (): string | undefined => {
+      try {
+        const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+        if (!fs.existsSync(brainDir)) return undefined;
+
+        const entries = fs.readdirSync(brainDir, { withFileTypes: true });
+        const dirStats: { transcriptPath: string; mtime: number }[] = [];
+
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const transcriptPath = path.join(brainDir, entry.name, '.system_generated', 'logs', 'transcript.jsonl');
+            if (fs.existsSync(transcriptPath)) {
+              try {
+                const stat = fs.statSync(transcriptPath);
+                if (stat.mtimeMs >= startTime) {
+                  dirStats.push({ transcriptPath, mtime: stat.mtimeMs });
+                }
+              } catch {}
+            }
+          }
+        }
+
+        if (dirStats.length === 0) return undefined;
+        dirStats.sort((a, b) => b.mtime - a.mtime);
+
+        // Check if top candidate transcript belongs to this issue or worktree
+        for (const candidate of dirStats.slice(0, 5)) {
+          try {
+            const head = fs.readFileSync(candidate.transcriptPath, 'utf8').slice(0, 3000);
+            if (
+              head.includes(`issues/${issueNumber}`) ||
+              head.includes(`issue-${issueNumber}`) ||
+              head.includes(`Issue #${issueNumber}`) ||
+              head.includes(path.basename(worktreePath))
+            ) {
+              return candidate.transcriptPath;
+            }
+          } catch {}
+        }
+
+        // Fallback to newest
+        return dirStats[0].transcriptPath;
+      } catch {
+        return undefined;
+      }
+    };
 
     const check = () => {
       try {
-        const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
-        if (!fs.existsSync(claudeProjectsDir)) return;
-
-        const sanitizedPath = worktreePath.replace(/\//g, '-');
-        const projectDirs = fs.readdirSync(claudeProjectsDir);
-        const matchDir = projectDirs.find((d) => d.includes(path.basename(worktreePath)) || d === sanitizedPath);
-        if (!matchDir) return;
-
-        const fullMatchPath = path.join(claudeProjectsDir, matchDir);
-        const files = fs.readdirSync(fullMatchPath).filter((f) => f.endsWith('.jsonl'));
-        if (files.length === 0) return;
-
-        const stats = files.map((f) => ({
-          file: f,
-          mtime: fs.statSync(path.join(fullMatchPath, f)).mtimeMs,
-        }));
-        stats.sort((a, b) => b.mtime - a.mtime);
-        const latestFile = path.join(fullMatchPath, stats[0].file);
-
-        if (latestFile !== currentFile) {
-          currentFile = latestFile;
-          lastLineCount = 0;
+        if (!currentTranscriptPath) {
+          currentTranscriptPath = findTranscriptFile();
+          if (!currentTranscriptPath) return;
         }
 
-        const content = fs.readFileSync(latestFile, 'utf8');
+        if (!fs.existsSync(currentTranscriptPath)) return;
+
+        const content = fs.readFileSync(currentTranscriptPath, 'utf8');
         const lines = content.split('\n').filter(Boolean);
+
         if (lines.length > lastLineCount) {
           const newLines = lines.slice(lastLineCount);
           lastLineCount = lines.length;
@@ -403,41 +434,47 @@ ${guidelines}
           for (const line of newLines) {
             try {
               const parsed = JSON.parse(line);
-              if (parsed.type === 'assistant' && parsed.message?.content) {
-                for (const block of parsed.message.content) {
-                  if (block.type === 'tool_use') {
-                    procInfo.isExecutingTool = true;
-                    procInfo.currentTool = block.name;
-                    const inputSummary = block.input ? JSON.stringify(block.input).slice(0, 100) : '';
-                    this.eventBus.emitAgentEvent({
-                      issueNumber,
-                      type: 'tool_start',
-                      summary: `🔧 ${block.name}: ${inputSummary}`,
-                      detail: { name: block.name, input: block.input },
-                    });
-                  } else if (block.type === 'text' && block.text) {
-                    const text = block.text.trim();
-                    if (text) {
-                      this.eventBus.emitAgentEvent({
-                        issueNumber,
-                        type: 'thought',
-                        summary: text,
-                      });
-                    }
-                  }
+
+              // Tool calls
+              if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
+                for (const tc of parsed.tool_calls) {
+                  procInfo.isExecutingTool = true;
+                  procInfo.currentTool = tc.name;
+                  const summary = tc.args?.toolSummary || tc.args?.toolAction || '';
+                  const cmd = tc.args?.CommandLine ? `\`${tc.args.CommandLine.slice(0, 50)}\`` : '';
+                  const target = tc.args?.TargetFile ? path.basename(tc.args.TargetFile) : '';
+                  const detail = summary || cmd || target || tc.name;
+
+                  this.eventBus.emitAgentEvent({
+                    issueNumber,
+                    type: 'tool_start',
+                    summary: `🔧 ${tc.name}: ${detail}`,
+                    detail: tc.args,
+                  });
                 }
-              } else if (parsed.type === 'user' && parsed.message?.content) {
-                for (const block of parsed.message.content) {
-                  if (block.type === 'tool_result') {
-                    procInfo.isExecutingTool = false;
-                    procInfo.currentTool = undefined;
-                    this.eventBus.emitAgentEvent({
-                      issueNumber,
-                      type: 'tool_end',
-                      summary: `✓ Tool result received`,
-                      detail: { toolUseId: block.tool_use_id },
-                    });
-                  }
+              }
+              // Model responses / thoughts
+              else if (parsed.type === 'PLANNER_RESPONSE' && parsed.content) {
+                const thought = parsed.content.trim();
+                if (thought) {
+                  this.eventBus.emitAgentEvent({
+                    issueNumber,
+                    type: 'thought',
+                    summary: thought.slice(0, 160),
+                  });
+                }
+              }
+              // Tool execution results
+              else if (parsed.type === 'GENERIC' || (parsed.source === 'MODEL' && parsed.content)) {
+                procInfo.isExecutingTool = false;
+                procInfo.currentTool = undefined;
+                const firstLine = (parsed.content || '').split('\n')[0] || '';
+                if (firstLine && !firstLine.startsWith('{')) {
+                  this.eventBus.emitAgentEvent({
+                    issueNumber,
+                    type: 'tool_end',
+                    summary: `✓ ${firstLine.slice(0, 80)}`,
+                  });
                 }
               }
             } catch {}
@@ -447,8 +484,7 @@ ${guidelines}
     };
 
     const timer = setInterval(check, 600);
-    // Initial check after short delay
-    setTimeout(check, 300);
+    setTimeout(check, 1000);
 
     return {
       stop: () => clearInterval(timer),
