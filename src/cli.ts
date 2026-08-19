@@ -22,7 +22,7 @@ const program = new Command();
 program
   .name('imagos')
   .description('Autonomous multi-agent GitHub issue orchestrator powered by Claude CLI & git worktrees')
-  .version('0.1.0');
+  .version('0.2.0');
 
 // 1. START COMMAND
 program

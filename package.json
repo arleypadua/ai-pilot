@@ -1,6 +1,6 @@
 {
   "name": "imagos",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Autonomous multi-agent GitHub issue orchestrator powered by Claude CLI, git worktrees, DAG scheduling, and 5h rolling quota management",
   "type": "module",
   "main": "./dist/index.js",
@@ -49,7 +49,6 @@
     "commander": "^13.1.0",
     "dotenv": "^16.4.7",
     "execa": "^9.5.2",
-    "imagos": "link:",
     "node-notifier": "^10.0.1",
     "picocolors": "^1.1.1",
     "zod": "^3.24.2"

@@ -6,6 +6,3 @@ allowBuilds:
 
 onlyBuiltDependencies:
   - esbuild
-
-overrides:
-  imagos: 'link:'
