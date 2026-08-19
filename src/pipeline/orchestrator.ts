@@ -211,13 +211,24 @@ export class Orchestrator {
         startedAt: new Date(),
       });
 
-      // 2. Check user feedback
+      // 2. Post Start/Resume Comment to GitHub Issue
+      const startComment = isContinuation
+        ? `🔄 **Agent Auto-Pilot resumed work**\n\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Resumed At**: \`${new Date().toUTCString()}\`\n\n*Continuing implementation with latest feedback from comments.*`
+        : `🤖 **Agent Auto-Pilot started implementation**\n\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${this.config.baseBranch}\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*I will execute tests locally, rebase against \`${this.config.baseBranch}\`, and open a Pull Request upon completion.*`;
+
+      try {
+        await this.gh.addComment(issue.number, startComment);
+      } catch {
+        // Comment failure is non-fatal
+      }
+
+      // 3. Check user feedback
       let userFeedback: string | undefined = undefined;
       if (isContinuation && issue.comments && issue.comments.length > 0) {
         userFeedback = issue.comments[issue.comments.length - 1].body;
       }
 
-      // 3. Run Agent
+      // 4. Run Agent
       const runner = this.runners.get(this.config.runner);
       this.stateMgr.recordTaskStage(issue.number, 'AGENT_RUNNING', 'running', `Invoking ${this.config.runner} /implement`);
 
