@@ -227,6 +227,123 @@ program
     }
   });
 
+// 6. BACKLOG / QUEUE COMMAND
+program
+  .command('backlog')
+  .alias('queue')
+  .description('Inspect the issue backlog (ready for agent, waiting on human, blocked by deps, etc.)')
+  .option('-c, --config <path>', 'Path to config.json')
+  .option('-r, --ready', 'Show only issues ready for agent execution')
+  .option('-p, --pending', 'Show only issues pending on developer feedback (needs-info / ready-for-human)')
+  .option('-b, --blocked', 'Show only issues blocked by dependencies')
+  .option('-t, --triage', 'Show only issues needing triage')
+  .action(async (options) => {
+    try {
+      const config = await loadConfig(options.config);
+      const gh = new GitHubClient({ repository: config.repository });
+      const issues = await gh.fetchIssues();
+
+      const dag = new IssueDAG(config);
+      dag.build(issues);
+
+      const allNodes = dag.getAllNodes();
+      const readyNodes = dag.getReadyNodes();
+      const waitingNodes = dag.getWaitingFeedbackNodes();
+      const blockedNodes = dag.getBlockedNodes();
+      const triageNodes = allNodes.filter((n) => n.status === 'pending');
+
+      const filterActive = options.ready || options.pending || options.blocked || options.triage;
+
+      console.log(pc.bold(pc.cyan(`\n=== ISSUE BACKLOG & QUEUE: ${config.repository || 'Local'} ===\n`)));
+
+      // 1. PENDING ON HUMAN
+      if (!filterActive || options.pending) {
+        console.log(pc.bold(pc.yellow(`📌 Pending on Human Feedback (${waitingNodes.length}):`)));
+        if (waitingNodes.length === 0) {
+          console.log(pc.gray('  No issues waiting for human input.\n'));
+        } else {
+          for (const node of waitingNodes) {
+            const latestComment = node.issue.comments?.[node.issue.comments.length - 1]?.body;
+            console.log(
+              `  ${pc.bold(pc.yellow(`#${node.issue.number}`))} ${pc.bold(node.issue.title)} ${pc.gray(`(${node.kind})`)}`
+            );
+            console.log(`    URL: ${pc.cyan(node.issue.url)}`);
+            if (latestComment) {
+              const preview = latestComment.replace(/\n+/g, ' ').slice(0, 100);
+              console.log(`    ${pc.gray('Question/Comment:')} "${preview}${latestComment.length > 100 ? '...' : ''}"`);
+            }
+            console.log('');
+          }
+        }
+      }
+
+      // 2. READY FOR AGENT
+      if (!filterActive || options.ready) {
+        console.log(pc.bold(pc.green(`🚀 Ready for Agent Execution (${readyNodes.length}):`)));
+        if (readyNodes.length === 0) {
+          console.log(pc.gray('  No issues ready for agent execution.\n'));
+        } else {
+          const table = new Table({
+            head: [pc.cyan('Issue'), pc.cyan('Title'), pc.cyan('Kind'), pc.cyan('Labels')],
+            colWidths: [10, 36, 14, 25],
+          });
+          for (const node of readyNodes) {
+            table.push([
+              `#${node.issue.number}`,
+              node.issue.title.slice(0, 34),
+              node.kind,
+              node.issue.labels.map((l) => l.name).join(', ').slice(0, 23),
+            ]);
+          }
+          console.log(table.toString());
+          console.log('');
+        }
+      }
+
+      // 3. BLOCKED BY DEPENDENCIES
+      if (!filterActive || options.blocked) {
+        console.log(pc.bold(pc.red(`⏳ Blocked by Dependencies (${blockedNodes.length}):`)));
+        if (blockedNodes.length === 0) {
+          console.log(pc.gray('  No issues blocked by dependencies.\n'));
+        } else {
+          const table = new Table({
+            head: [pc.cyan('Issue'), pc.cyan('Title'), pc.cyan('Waiting on Blockers')],
+            colWidths: [10, 40, 30],
+          });
+          for (const node of blockedNodes) {
+            const unresolved = dag.getUnresolvedBlockers(node.issue.number);
+            table.push([
+              `#${node.issue.number}`,
+              node.issue.title.slice(0, 38),
+              unresolved.map((id) => `#${id}`).join(', ') || 'Parent/Blocker Open',
+            ]);
+          }
+          console.log(table.toString());
+          console.log('');
+        }
+      }
+
+      // 4. NEEDS TRIAGE
+      if (!filterActive || options.triage) {
+        console.log(pc.bold(pc.gray(`📋 Needs Triage / Other Open Issues (${triageNodes.length}):`)));
+        if (triageNodes.length === 0) {
+          console.log(pc.gray('  No un-triaged open issues.\n'));
+        } else {
+          for (const node of triageNodes.slice(0, 10)) {
+            console.log(`  #${node.issue.number}: ${node.issue.title} ${pc.gray(`[${node.issue.labels.map((l) => l.name).join(', ')}]`)}`);
+          }
+          if (triageNodes.length > 10) {
+            console.log(pc.gray(`  ... and ${triageNodes.length - 10} more`));
+          }
+          console.log('');
+        }
+      }
+    } catch (err: any) {
+      console.error(pc.red(`Backlog error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
 // 5. CLEAN COMMAND
 program
   .command('clean')
@@ -251,3 +368,4 @@ program
   });
 
 program.parse(process.argv);
+
