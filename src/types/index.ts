@@ -72,6 +72,7 @@ export interface TaskContext {
   baseBranch: string;
   isContinuation?: boolean;
   userFeedback?: string;
+  extraPrompt?: string;
 }
 
 export interface RunnerResult {
@@ -89,6 +90,7 @@ export interface AutoPilotConfig {
   baseBranch: string;
   maxConcurrency: number;
   pollIntervalSeconds: number;
+  extraPrompt?: string;
   runner: 'claude' | 'agy' | 'pi' | 'custom';
   customRunnerCommand?: string;
   autoMerge: boolean;

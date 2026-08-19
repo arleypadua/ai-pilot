@@ -10,6 +10,7 @@ export const AutoPilotConfigSchema = z.object({
   baseBranch: z.string().default('main'),
   maxConcurrency: z.number().int().min(1).default(2),
   pollIntervalSeconds: z.number().int().min(5).default(30),
+  extraPrompt: z.string().optional(),
   runner: z.enum(['claude', 'agy', 'pi', 'custom']).default('claude'),
   customRunnerCommand: z.string().optional(),
   autoMerge: z.boolean().default(true),

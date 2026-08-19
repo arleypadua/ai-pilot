@@ -29,6 +29,10 @@
       "default": 30,
       "description": "Frequency in seconds to poll GitHub issues"
     },
+    "extraPrompt": {
+      "type": "string",
+      "description": "Additional custom instructions or context injected into every agent prompt across the repository (e.g. environment setup, copy untracked .env files, styling rules)"
+    },
     "runner": {
       "type": "string",
       "enum": ["claude", "agy", "pi", "custom"],

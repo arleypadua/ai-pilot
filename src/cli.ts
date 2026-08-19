@@ -80,6 +80,7 @@ program
         baseBranch: 'main',
         maxConcurrency: 2,
         pollIntervalSeconds: 30,
+        extraPrompt: "",
         runner: 'claude',
         autoMerge: true,
         mergeMethod: 'squash',

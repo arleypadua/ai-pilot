@@ -40,7 +40,11 @@ export class ClaudeRunner implements AgentRunner {
   }
 
   public buildPrompt(context: TaskContext): string {
-    const { issue, isContinuation, userFeedback } = context;
+    const { issue, isContinuation, userFeedback, extraPrompt } = context;
+
+    const extraSection = extraPrompt
+      ? `\n### Repository Instructions\n${extraPrompt.trim()}\n`
+      : '';
 
     if (isContinuation && userFeedback) {
       return `/implement Resume Issue #${issue.number}: ${issue.title}
@@ -54,7 +58,7 @@ ${userFeedback}
 
 ### Original Issue Description
 ${issue.body || 'No description provided.'}
-
+${extraSection}
 ### Guidelines
 1. Check current git status, inspect changes already made, and complete the implementation according to the clarification.
 2. Run test suites to verify that tests pass.
@@ -71,7 +75,7 @@ You are resuming work on this task after a session pause. Your previous conversa
 
 ### Original Issue Description
 ${issue.body || 'No description provided.'}
-
+${extraSection}
 ### Guidelines & Protocol
 1. Check current git status, review the changes already drafted in this worktree, and continue implementation from where you left off.
 2. Ensure existing tests pass and add new tests covering your changes.
@@ -88,7 +92,7 @@ ${issue.body || 'No description provided.'}
 
 ### Task Description
 ${issue.body || 'No description provided.'}
-
+${extraSection}
 ### Guidelines & Protocol
 1. Implement the requested feature or fix in its entirety.
 2. Ensure existing tests pass and add new tests covering your changes.

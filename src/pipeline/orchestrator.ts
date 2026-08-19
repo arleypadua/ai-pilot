@@ -255,6 +255,7 @@ export class Orchestrator {
           baseBranch: this.config.baseBranch,
           isContinuation,
           userFeedback,
+          extraPrompt: this.config.extraPrompt,
         },
         {
           cwd: worktreePath,
