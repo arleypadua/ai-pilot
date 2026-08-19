@@ -80,7 +80,7 @@ imagos backlog -s 50,51 --ready
 | :--- | :--- |
 | `imagos start` | Start the autonomous daemon and live terminal dashboard |
 | `imagos status` | Show current issue DAG, active sessions, and worktree allocations |
-| `imagos backlog` | Filter and inspect the issue queue (`--ready`, `--pending`, `--blocked`) |
+| `imagos backlog` | Filter and inspect the issue queue (`--ready`, `--pending`, `--blocked`, `--json`) |
 | `imagos inspect <issue>` | Live stream tool calls, modified files, and diff stat for an active task |
 | `imagos logs <issue>` | View stdout/stderr output for a specific task |
 | `imagos resume` | Unpause workers after quota reset or clear a paused state |

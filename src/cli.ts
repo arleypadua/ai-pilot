@@ -411,6 +411,7 @@ program
   .option('-p, --pending', 'Show only issues pending on developer feedback (needs-info / ready-for-human)')
   .option('-b, --blocked', 'Show only issues blocked by dependencies')
   .option('-t, --triage', 'Show only issues needing triage')
+  .option('--json', 'Serialize backlog nodes as JSON array to stdout')
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
@@ -446,6 +447,28 @@ program
       );
 
       const filterActive = options.ready || options.pending || options.blocked || options.triage;
+
+      if (options.json) {
+        const resultNodes: DAGNode[] = [];
+        if (filterActive) {
+          if (options.pending) resultNodes.push(...waitingNodes);
+          if (options.ready) resultNodes.push(...readyNodes);
+          if (options.blocked) resultNodes.push(...blockedNodes);
+          if (options.triage) resultNodes.push(...triageNodes);
+        } else {
+          resultNodes.push(...waitingNodes, ...readyNodes, ...blockedNodes, ...triageNodes);
+        }
+
+        const seen = new Set<number>();
+        const uniqueNodes = resultNodes.filter((node) => {
+          if (seen.has(node.issue.number)) return false;
+          seen.add(node.issue.number);
+          return true;
+        });
+
+        console.log(JSON.stringify(uniqueNodes, null, 2));
+        return;
+      }
 
       console.log(pc.bold(pc.cyan(`\n=== ISSUE BACKLOG & QUEUE: ${config.repository || 'Local'} ===\n`)));
 
