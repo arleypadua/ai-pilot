@@ -31,6 +31,17 @@ export class Notifier {
     }
   }
 
+  public static notifyNeedsFeedback(issueNumber: number, issueTitle: string, question?: string): void {
+    this.notifyTaskNeedsFeedback(issueNumber, issueTitle, question);
+  }
+
+  public static notifySpecComplete(specNumber: number, specTitle: string): void {
+    const title = `Auto-Pilot: Spec #${specNumber} Complete`;
+    const message = `All child tickets for Spec #${specNumber} are done!`;
+    this.notifyDesktop({ title, message });
+    console.log(pc.magenta(`\n🎉 [Spec Complete] Spec #${specNumber}: ${specTitle} — Waiting for developer review & closure.`));
+  }
+
   public static notifyQuotaPaused(resetAt: Date, waitMinutes: number): void {
     const title = `Auto-Pilot: Quota Paused`;
     const timeStr = resetAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

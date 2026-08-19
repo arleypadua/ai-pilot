@@ -4,7 +4,6 @@ import { IssueDAG } from '../github/dag.js';
 import { WorktreeManager } from '../worktree/manager.js';
 import { QuotaMonitor } from '../quota/monitor.js';
 import { RunnerRegistry } from '../runners/registry.js';
-import { Integrator } from './integrator.js';
 import { Notifier } from '../notifications/notifier.js';
 import { Dashboard } from '../ui/dashboard.js';
 import { StateManager } from '../state/manager.js';
@@ -16,7 +15,6 @@ export class Orchestrator {
   private worktreeMgr: WorktreeManager;
   private quotaMonitor: QuotaMonitor;
   private runners: RunnerRegistry;
-  private integrator: Integrator;
   private dashboard: Dashboard;
   private stateMgr: StateManager;
 
@@ -33,7 +31,6 @@ export class Orchestrator {
     this.worktreeMgr = new WorktreeManager();
     this.quotaMonitor = new QuotaMonitor();
     this.runners = new RunnerRegistry(this.quotaMonitor);
-    this.integrator = new Integrator(config, this.gh, this.worktreeMgr);
     this.dashboard = new Dashboard(config);
     this.stateMgr = new StateManager();
 
@@ -103,70 +100,60 @@ export class Orchestrator {
       return;
     }
 
-    // 4. Check for tasks needing feedback notification
-    for (const node of this.dag.getWaitingFeedbackNodes()) {
-      if (!this.lastKnownFeedbackQuestions.has(node.issue.number)) {
-        const latestComment = node.issue.comments?.[node.issue.comments.length - 1]?.body;
-        this.lastKnownFeedbackQuestions.set(node.issue.number, latestComment || 'Waiting for human input');
-        Notifier.notifyTaskNeedsFeedback(node.issue.number, node.issue.title, latestComment);
-        this.dashboard.log(`Issue #${node.issue.number} flagged for human feedback.`);
-      }
-    }
-
-    // 5. Check if scoped Spec is completely finished
+    // 4. Check for Spec Completion
     if (this.config.targetSpec) {
-      const specNumber = this.config.targetSpec;
-      const specCheck = this.dag.isSpecComplete(specNumber);
+      const specNum = this.config.targetSpec;
+      const isComplete = this.dag.isSpecComplete(specNum);
 
-      if (specCheck.isComplete && this.activeTaskNumbers.size === 0) {
-        if (!this.notifiedSpecCompletions.has(specNumber)) {
-          this.notifiedSpecCompletions.add(specNumber);
+      if (isComplete && !this.notifiedSpecCompletions.has(specNum)) {
+        this.notifiedSpecCompletions.add(specNum);
+        this.dashboard.log(`Spec #${specNum} is COMPLETE! All child tickets are merged.`);
+        Notifier.notifySpecComplete(specNum, `Spec #${specNum} is complete`);
 
-          this.dashboard.log(
-            `🎉 Spec #${specNumber} is complete! All ${specCheck.totalTickets} child tickets are merged. Waiting for developer review and closure.`
+        try {
+          await this.gh.addComment(
+            specNum,
+            `🎉 **Spec Complete**: All child tickets for this spec have been implemented and closed.\n\nWaiting for developer review and closure.`
           );
-
-          Notifier.notifyDesktop({
-            title: `Auto-Pilot: Spec #${specNumber} Complete`,
-            message: `All ${specCheck.totalTickets} child tickets merged. Waiting for developer closure.`,
+          await this.gh.editIssueLabels(specNum, {
+            add: [this.config.labels.readyForHuman],
+            remove: [this.config.labels.readyForAgent],
           });
-
-          try {
-            await this.gh.addComment(
-              specNumber,
-              `🎉 **Spec Complete**: All ${specCheck.totalTickets} child tickets for this spec have been implemented and merged.\n\nWaiting for developer review and closure.`
-            );
-            await this.gh.editIssueLabels(specNumber, {
-              add: [this.config.labels.readyForHuman],
-              remove: [this.config.labels.readyForAgent],
-            });
-          } catch {
-            // Best effort
-          }
+        } catch {
+          // Best effort
         }
-        return;
       }
     }
 
-    // 6. Identify ready candidates
+    // 5. Check for newly ready feedback tasks
+    const waitingNodes = this.dag.getWaitingFeedbackNodes();
+    for (const node of waitingNodes) {
+      const issue = node.issue;
+      const lastComment = issue.comments && issue.comments.length > 0 ? issue.comments[issue.comments.length - 1].body : '';
+      const prevComment = this.lastKnownFeedbackQuestions.get(issue.number);
+
+      if (lastComment && lastComment !== prevComment) {
+        this.lastKnownFeedbackQuestions.set(issue.number, lastComment);
+        Notifier.notifyNeedsFeedback(issue.number, issue.title, lastComment);
+        this.dashboard.log(`Notification sent for Issue #${issue.number} (needs info)`);
+      }
+    }
+
+    // 6. Schedule Ready Tasks up to maxConcurrency
     const readyNodes = this.dag.getReadyNodes();
+    const availableSlots = this.config.maxConcurrency - this.activeTaskNumbers.size;
 
-    for (const node of readyNodes) {
-      if (this.lastKnownFeedbackQuestions.has(node.issue.number)) {
-        this.lastKnownFeedbackQuestions.delete(node.issue.number);
-      }
+    if (availableSlots <= 0 || readyNodes.length === 0) {
+      return;
+    }
 
-      // Check concurrency
-      if (this.activeTaskNumbers.size >= this.config.maxConcurrency) {
-        break;
-      }
+    const tasksToDispatch = readyNodes
+      .filter((n) => !this.activeTaskNumbers.has(n.issue.number))
+      .slice(0, availableSlots);
 
-      if (this.activeTaskNumbers.has(node.issue.number)) {
-        continue;
-      }
-
-      // Dispatch task in background
+    for (const node of tasksToDispatch) {
       this.activeTaskNumbers.add(node.issue.number);
+      // Run asynchronously in background
       this.executeTask(node).finally(() => {
         this.activeTaskNumbers.delete(node.issue.number);
         this.dashboard.removeWorker(node.issue.number);
@@ -214,7 +201,7 @@ export class Orchestrator {
       // 2. Post Start/Resume Comment to GitHub Issue
       const startComment = isContinuation
         ? `🔄 **Agent Auto-Pilot resumed work**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Resumed At**: \`${new Date().toUTCString()}\`\n\n*Continuing implementation with latest feedback from comments.*`
-        : `🤖 **Agent Auto-Pilot started implementation**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${this.config.baseBranch}\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*I will execute tests locally, rebase against \`${this.config.baseBranch}\`, and open a Pull Request upon completion.*`;
+        : `🤖 **Agent Auto-Pilot started implementation**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${this.config.baseBranch}\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*Delegating task to \`${this.config.runner}\` (/implement).*`;
 
       try {
         await this.gh.addComment(issue.number, startComment);
@@ -222,13 +209,13 @@ export class Orchestrator {
         // Comment failure is non-fatal
       }
 
-      // 3. Check user feedback
+      // 3. Check user feedback for continuation
       let userFeedback: string | undefined = undefined;
       if (isContinuation && issue.comments && issue.comments.length > 0) {
         userFeedback = issue.comments[issue.comments.length - 1].body;
       }
 
-      // 4. Run Agent
+      // 4. Run Agent (/implement)
       const runner = this.runners.get(this.config.runner);
       this.stateMgr.recordTaskStage(issue.number, 'AGENT_RUNNING', 'running', `Invoking ${this.config.runner} /implement`);
 
@@ -245,13 +232,13 @@ export class Orchestrator {
         {
           cwd: worktreePath,
           issueNumber: issue.number,
-          onOutput: (chunk) => {
+          onOutput: (chunk: string) => {
             this.stateMgr.appendTaskLog(issue.number, 'stdout', chunk);
           },
-          onStderr: (chunk) => {
+          onStderr: (chunk: string) => {
             this.stateMgr.appendTaskLog(issue.number, 'stderr', chunk);
           },
-          onPid: (pid) => {
+          onPid: (pid: number) => {
             this.stateMgr.recordTaskStage(issue.number, 'PID_ASSIGNED', 'running', `Process PID: ${pid}`);
           },
         }
@@ -271,74 +258,41 @@ export class Orchestrator {
         return;
       }
 
-      // Check if runner or agent changed label to needs-info / ready-for-human
+      // 5. Inspect issue state on GitHub after agent finishes
       const updatedIssue = await this.gh.viewIssue(issue.number);
       const hasFeedbackLabel = updatedIssue.labels.some((l) =>
         [this.config.labels.needsInfo, this.config.labels.readyForHuman].includes(l.name)
       );
 
+      // Case A: Agent requested info from human
       if (hasFeedbackLabel || runnerRes.status === 'NEEDS_INFO') {
         this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
         this.dashboard.log(`Issue #${issue.number} parked awaiting developer feedback.`);
         return;
       }
 
-      // 4. If Completed, run Integration & Merge Pipeline
-      if (runnerRes.success || runnerRes.status === 'COMPLETED') {
-        this.stateMgr.recordTaskStage(issue.number, 'INTEGRATING', 'merging', 'Rebasing on main & creating PR');
-        this.dashboard.updateWorker({
-          issueNumber: issue.number,
-          title: issue.title,
-          branchName,
-          status: 'merging',
-          startedAt: new Date(),
-        });
+      // Case B: Agent completed and closed/merged the issue
+      if (updatedIssue.state === 'CLOSED') {
+        this.stateMgr.finishTaskSession(issue.number, 'completed');
+        this.dashboard.log(`Issue #${issue.number} completed and closed.`);
+        Notifier.notifyTaskMerged(issue.number, issue.title);
 
-        this.dashboard.log(`Rebasing, opening PR & merging Issue #${issue.number}...`);
-
-        const integrationRes = await this.integrator.integrateAndMerge(
-          issue,
-          worktreePath,
-          branchName,
-          runnerRes.summary
-        );
-
-        if (integrationRes.success) {
-          this.stateMgr.finishTaskSession(issue.number, 'completed', {
-            prUrl: integrationRes.prUrl,
-            prNumber: integrationRes.prNumber,
-          });
-          this.dashboard.log(`Successfully merged & closed Issue #${issue.number} (PR #${integrationRes.prNumber})`);
-        } else {
-          this.stateMgr.finishTaskSession(issue.number, 'failed', {
-            error: integrationRes.error,
-          });
-          this.dashboard.log(`Integration failed for Issue #${issue.number}: ${integrationRes.error}`);
-          await this.gh.addComment(
-            issue.number,
-            `⚠️ Agent Auto-Pilot finished implementation, but automated integration/tests failed:\n\`\`\`\n${integrationRes.error}\n\`\`\``
-          );
-          await this.gh.editIssueLabels(issue.number, {
-            add: [this.config.labels.readyForHuman],
-            remove: [this.config.labels.readyForAgent],
-          });
+        if (this.config.cleanupWorktreeOnClose) {
+          await this.worktreeMgr.cleanupWorktree(issue.number, issue.title, true);
         }
+        return;
+      }
+
+      // Case C: Issue remains open
+      if (runnerRes.success || runnerRes.status === 'COMPLETED') {
+        this.dashboard.log(`Agent finished execution for Issue #${issue.number}.`);
+      } else {
+        this.stateMgr.finishTaskSession(issue.number, 'failed', { error: runnerRes.error });
+        this.dashboard.log(`Agent exited with error on Issue #${issue.number}: ${runnerRes.error || 'Unknown'}`);
       }
     } catch (err: any) {
       this.stateMgr.finishTaskSession(issue.number, 'failed', { error: err.message });
-      this.dashboard.log(`Task #${issue.number} failed: ${err.message}`);
-      try {
-        await this.gh.addComment(
-          issue.number,
-          `❌ Agent Auto-Pilot task failed with error:\n\`\`\`\n${err.message}\n\`\`\``
-        );
-        await this.gh.editIssueLabels(issue.number, {
-          add: [this.config.labels.readyForHuman],
-          remove: [this.config.labels.readyForAgent],
-        });
-      } catch {
-        // Best effort
-      }
+      this.dashboard.log(`Task #${issue.number} error: ${err.message}`);
     }
   }
 
