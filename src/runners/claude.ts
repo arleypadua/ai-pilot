@@ -40,14 +40,27 @@ export class ClaudeRunner implements AgentRunner {
   }
 
   public buildPrompt(context: TaskContext): string {
-    const { issue, isContinuation, userFeedback, extraPrompt } = context;
+    const { issue, isContinuation, userFeedback, extraPrompt, baseBranch = 'main' } = context;
+    const issueRef = issue.url || `#${issue.number}`;
 
     const extraSection = extraPrompt
       ? `\n### Repository Instructions\n${extraPrompt.trim()}\n`
       : '';
 
+    const guidelines = `### Guidelines & Protocol
+1. **Feedback & Questions**: If you encounter blocking ambiguities or require clarification from the developer:
+   - Post your question: \`gh issue comment ${issue.number} --body "<your question>"\`
+   - Mark for developer feedback: \`gh issue edit ${issue.number} --add-label "needs-info" --remove-label "ready-for-agent"\`
+   - **Immediately conclude execution and exit.** Do not guess or proceed further. Autopilot will automatically resume this session once the developer responds and re-assigns \`ready-for-agent\`.
+2. **Follow-up Subtasks**: If you identify distinct out-of-scope work or follow-up subtasks:
+   - Create child tickets: \`gh issue create --title "<title>" --body "Parent: #${issue.number}\\nBlocked by: #${issue.number}\\n\\n<details>" --label "ready-for-agent"\`
+3. **PR, Rebase & Merge**:
+   - Push your branch and open a Pull Request: \`gh pr create --title "<title>" --body "Closes #${issue.number}\\n\\n<summary>"\`
+   - Rebase onto \`${baseBranch}\` and resolve any conflicts if necessary.
+   - Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --squash --delete-branch\`) to close the issue.`;
+
     if (isContinuation && userFeedback) {
-      return `/implement Resume Issue #${issue.number}: ${issue.title}
+      return `/implement ${issueRef}
 
 You are continuing work on this task following clarification from the developer.
 
@@ -59,49 +72,28 @@ ${userFeedback}
 ### Original Issue Description
 ${issue.body || 'No description provided.'}
 ${extraSection}
-### Guidelines
-1. Check current git status, inspect changes already made, and complete the implementation according to the clarification.
-2. Run test suites to verify that tests pass.
-3. If you need further clarification, comment with \`gh issue comment ${issue.number} --body "..."\` and add label \`gh issue edit ${issue.number} --add-label "needs-info" --remove-label "ready-for-agent"\`.
-4. If you discover distinct follow-up subtasks, create them via \`gh issue create --title "..." --body "Parent: #${issue.number}..." --label "ready-for-agent"\`.
-5. Do not modify files outside the scope of this issue.
+${guidelines}
 `;
     }
 
     if (isContinuation) {
-      return `/implement Resume Issue #${issue.number}: ${issue.title}
+      return `/implement ${issueRef}
 
 You are resuming work on this task after a session pause. Your previous conversation history, loaded files, and worktree state are restored.
 
 ### Original Issue Description
 ${issue.body || 'No description provided.'}
 ${extraSection}
-### Guidelines & Protocol
-1. Check current git status, review the changes already drafted in this worktree, and continue implementation from where you left off.
-2. Ensure existing tests pass and add new tests covering your changes.
-3. If you encounter blocking ambiguities or questions for the developer:
-   - Post your question using: \`gh issue comment ${issue.number} --body "<your question>"\`
-   - Mark for feedback using: \`gh issue edit ${issue.number} --add-label "needs-info" --remove-label "ready-for-agent"\`
-4. If you identify outstanding work that should be a separate child ticket:
-   - Create it using: \`gh issue create --title "<title>" --body "Parent: #${issue.number}\nBlocked by: #${issue.number}\n\n<details>" --label "ready-for-agent"\`
-5. Do not modify files outside the scope of this issue.
+${guidelines}
 `;
     }
 
-    return `/implement Issue #${issue.number}: ${issue.title}
+    return `/implement ${issueRef}
 
 ### Task Description
 ${issue.body || 'No description provided.'}
 ${extraSection}
-### Guidelines & Protocol
-1. Implement the requested feature or fix in its entirety.
-2. Ensure existing tests pass and add new tests covering your changes.
-3. If you encounter blocking ambiguities or questions for the developer:
-   - Post your question using: \`gh issue comment ${issue.number} --body "<your question>"\`
-   - Mark for feedback using: \`gh issue edit ${issue.number} --add-label "needs-info" --remove-label "ready-for-agent"\`
-4. If you identify outstanding work that should be a separate child ticket:
-   - Create it using: \`gh issue create --title "<title>" --body "Parent: #${issue.number}\nBlocked by: #${issue.number}\n\n<details>" --label "ready-for-agent"\`
-5. Do not modify files outside the scope of this issue.
+${guidelines}
 `;
   }
 

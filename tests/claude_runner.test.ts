@@ -23,10 +23,15 @@ describe('ClaudeRunner', () => {
     };
 
     const prompt = runner.buildPrompt(context);
-    expect(prompt).toContain('/implement Issue #42: Add REST endpoint for metrics');
+    expect(prompt).toContain('/implement https://github.com/owner/repo/issues/42');
     expect(prompt).toContain('Create /api/metrics endpoint returning Prometheus format.');
     expect(prompt).toContain('gh issue comment');
     expect(prompt).toContain('needs-info');
+    expect(prompt).toContain('ready-for-agent');
+    expect(prompt).toContain('gh pr create');
+    expect(prompt).toContain('gh pr merge');
+    expect(prompt).not.toContain('Check current git status');
+    expect(prompt).not.toContain('Implement the requested feature or fix in its entirety');
   });
 
   it('should format continuation prompt with user feedback when resuming', () => {
@@ -51,8 +56,9 @@ describe('ClaudeRunner', () => {
     };
 
     const prompt = runner.buildPrompt(context);
-    expect(prompt).toContain('/implement Resume Issue #42: Add REST endpoint for metrics');
+    expect(prompt).toContain('/implement https://github.com/owner/repo/issues/42');
     expect(prompt).toContain('Use prom-client npm library for formatting.');
+    expect(prompt).toContain('gh pr merge');
   });
 
   it('should inject repository-specific extraPrompt when configured', () => {
