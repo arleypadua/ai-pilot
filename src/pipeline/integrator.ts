@@ -35,8 +35,8 @@ export class Integrator {
       `feat(issue-${issue.number}): ${issue.title}\n\nAutomated implementation by Agent Auto-Pilot`
     );
 
-    // 2. Run configured test suite
-    if (this.config.testCommand) {
+    // 2. Optional pre-merge test suite (if configured)
+    if (this.config.testCommand?.trim()) {
       const testRes = await this.worktreeMgr.runTests(worktreePath, this.config.testCommand);
       if (!testRes.success) {
         return {
@@ -60,8 +60,8 @@ export class Integrator {
       };
     }
 
-    // Run tests again after rebase to confirm no regressions from merged siblings
-    if (this.config.testCommand) {
+    // Optional post-rebase test suite (if configured)
+    if (this.config.testCommand?.trim()) {
       const postRebaseTest = await this.worktreeMgr.runTests(worktreePath, this.config.testCommand);
       if (!postRebaseTest.success) {
         return {

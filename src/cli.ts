@@ -79,7 +79,6 @@ program
         maxConcurrency: 2,
         pollIntervalSeconds: 30,
         runner: 'claude',
-        testCommand: 'npm test',
         autoMerge: true,
         mergeMethod: 'squash',
         cleanupWorktreeOnClose: true,

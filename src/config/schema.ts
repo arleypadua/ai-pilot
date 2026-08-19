@@ -12,7 +12,7 @@ export const AutoPilotConfigSchema = z.object({
   pollIntervalSeconds: z.number().int().min(5).default(30),
   runner: z.enum(['claude', 'agy', 'pi', 'custom']).default('claude'),
   customRunnerCommand: z.string().optional(),
-  testCommand: z.string().default('npm test'),
+  testCommand: z.string().optional().default(''),
   autoMerge: z.boolean().default(true),
   mergeMethod: z.enum(['squash', 'merge', 'rebase']).default('squash'),
   cleanupWorktreeOnClose: z.boolean().default(true),
