@@ -1,4 +1,4 @@
-import type { GitHubIssue, RunnerResult, TaskContext } from '../types/index.js';
+import type { GitHubIssue, RunnerConfig, RunnerResult, TaskContext } from '../types/index.js';
 import type { AgentRunner, RunnerOptions } from './base.js';
 import { RunnerRegistry } from './registry.js';
 import type { QuotaMonitor } from '../quota/monitor.js';
@@ -6,13 +6,7 @@ import type { QuotaMonitor } from '../quota/monitor.js';
 export interface RunnerFacadeOptions {
   quotaMonitor?: QuotaMonitor;
   defaultRunner?: string;
-  runnerConfig?: {
-    agy?: {
-      model?: string;
-      effort?: 'low' | 'medium' | 'high';
-      printTimeout?: string;
-    };
-  };
+  runnerConfig?: RunnerConfig;
 }
 
 export class RunnerFacade {

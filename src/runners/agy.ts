@@ -10,7 +10,7 @@ import { AgentEventBus } from '../events/bus.js';
 
 export interface AgyRunnerConfig {
   model?: string;
-  effort?: 'low' | 'medium' | 'high';
+  effort?: 'low' | 'medium' | 'high' | string;
   printTimeout?: string;
 }
 

@@ -5,6 +5,7 @@ import type { QuotaMonitor } from '../quota/monitor.js';
 
 export interface RegistryConfig {
   agy?: AgyRunnerConfig;
+  [key: string]: unknown;
 }
 
 export class RunnerRegistry {
