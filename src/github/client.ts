@@ -226,4 +226,19 @@ export class GitHubClient {
       await execa('gh', fallbackArgs, { cwd: this.cwd });
     }
   }
+
+  public async findPRForBranch(branchName: string): Promise<{ url: string; number: number; state: string } | undefined> {
+    try {
+      const args = ['pr', 'list', '--head', branchName, '--state', 'all', ...this.repoArgs(), '--json', 'number,url,state'];
+      const { stdout } = await execa('gh', args, { cwd: this.cwd });
+      if (!stdout.trim()) return undefined;
+      const prs = JSON.parse(stdout);
+      if (Array.isArray(prs) && prs.length > 0) {
+        return prs[0];
+      }
+    } catch {
+      // Best effort
+    }
+    return undefined;
+  }
 }

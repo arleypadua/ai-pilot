@@ -71,7 +71,7 @@ describe('IssueDAG', () => {
     expect(readyNodes.map((n) => n.issue.number)).toEqual([2]);
   });
 
-  it('should mark tasks with needs-info as waiting_feedback', () => {
+  it('should mark tasks with needs-info or ready-for-human as waiting_feedback', () => {
     const issues: GitHubIssue[] = [
       {
         number: 3,
@@ -83,13 +83,23 @@ describe('IssueDAG', () => {
         createdAt: '2026-08-19T10:00:00Z',
         updatedAt: '2026-08-19T10:00:00Z',
       },
+      {
+        number: 4,
+        title: 'PR Open for Review',
+        body: 'Implemented but unmerged',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-human' }],
+        url: 'https://github.com/owner/repo/issues/4',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
     ];
 
     const dag = new IssueDAG(DEFAULT_CONFIG);
     dag.build(issues);
 
     const feedbackNodes = dag.getWaitingFeedbackNodes();
-    expect(feedbackNodes.map((n) => n.issue.number)).toEqual([3]);
+    expect(feedbackNodes.map((n) => n.issue.number).sort()).toEqual([3, 4]);
   });
 
   it('should scope execution strictly to a target spec and detect completion', () => {

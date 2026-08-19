@@ -168,9 +168,12 @@ export class Dashboard {
         if (node && node.issue.state === 'OPEN') {
           renderedIssueNumbers.add(wt.issueNumber);
           const isPaused = quotaStatus.isPaused || quotaStatus.rollingStats?.isApproachingLimit;
-          const statusStr = isPaused
-            ? pc.yellow('⏳ paused (quota)')
-            : pc.cyan('⏳ waiting (WIP)');
+          let statusStr = isPaused ? pc.yellow('⏳ paused (quota)') : pc.cyan('⏳ waiting (WIP)');
+          if (node.status === 'waiting_feedback') {
+            statusStr = pc.magenta('👀 in review');
+          } else if (node.status === 'blocked') {
+            statusStr = pc.gray('⏳ blocked');
+          }
 
           workerTable.push([
             `#${wt.issueNumber}`,

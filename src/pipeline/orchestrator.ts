@@ -344,7 +344,49 @@ export class Orchestrator {
 
       // Case C: Issue remains open
       if (runnerRes.success || runnerRes.status === 'COMPLETED') {
-        this.dashboard.log(`Agent finished execution for Issue #${issue.number}.`);
+        const pr = await this.gh.findPRForBranch(branchName);
+
+        // Attempt automated merge if autoMerge is enabled and a PR was opened
+        if (pr && pr.state === 'OPEN' && this.config.autoMerge) {
+          try {
+            this.dashboard.log(`Auto-merging PR #${pr.number} for Issue #${issue.number}...`);
+            await this.gh.mergePR(pr.number, this.config.mergeMethod, true);
+            await this.gh.closeIssue(issue.number, `Closed via automated merge of PR #${pr.number}`);
+            this.stateMgr.finishTaskSession(issue.number, 'completed', { prUrl: pr.url, prNumber: pr.number });
+            this.dashboard.log(`Issue #${issue.number} completed and merged via PR #${pr.number}.`);
+            Notifier.notifyTaskMerged(issue.number, issue.title);
+
+            if (this.config.cleanupWorktreeOnClose) {
+              await this.worktreeMgr.cleanupWorktree(issue.number, issue.title, true);
+            }
+            return;
+          } catch (mergeErr: any) {
+            this.dashboard.log(`Auto-merge failed for PR #${pr.number}: ${mergeErr.message}. Transitioning to human review.`);
+          }
+        }
+
+        // Transition issue to ready-for-human so it does not loop in ready DAG queue
+        try {
+          await this.gh.editIssueLabels(issue.number, {
+            add: [this.config.labels.readyForHuman],
+            remove: [this.config.labels.readyForAgent],
+          });
+          const prMsg = pr ? `\n\n- **Pull Request**: [#${pr.number}](${pr.url})` : '';
+          await this.gh.addComment(
+            issue.number,
+            `👀 **Ready for Human Review**\n\nAgent completed execution without closing/merging.${prMsg}\n\n*Marked \`${this.config.labels.readyForHuman}\` for developer review and merge.*`
+          );
+        } catch {
+          // Best effort
+        }
+
+        this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback', {
+          prUrl: pr?.url,
+          prNumber: pr?.number,
+        });
+        this.dashboard.log(`Issue #${issue.number} marked ready-for-human (${pr ? `PR #${pr.number}` : 'unmerged'}).`);
+        Notifier.notifyNeedsFeedback(issue.number, issue.title, pr ? `PR #${pr.number} ready for review` : 'Agent finished execution');
+        return;
       } else {
         this.stateMgr.finishTaskSession(issue.number, 'failed', { error: runnerRes.error });
         this.dashboard.log(`Agent exited with error on Issue #${issue.number}: ${runnerRes.error || 'Unknown'}`);

@@ -48,10 +48,10 @@ export class ClaudeRunner implements AgentRunner {
       : '';
 
     const guidelines = `### Guidelines & Protocol
-1. **Feedback & Questions**: If you encounter blocking ambiguities or require clarification from the developer:
-   - Post your question: \`gh issue comment ${issue.number} --body "❓ **Agent Question**: <your question>"\`
-   - Mark for developer feedback: \`gh issue edit ${issue.number} --add-label "needs-info" --remove-label "ready-for-agent"\`
-   - **Immediately conclude execution and exit.** Do not guess or proceed further. Autopilot will automatically resume this session once the developer responds and re-assigns \`ready-for-agent\`.
+1. **Feedback, Questions & Human Review**: If you encounter blocking ambiguities, require clarification, or decide that manual human review is required before merging:
+   - Post your comment or question: \`gh issue comment ${issue.number} --body "❓ **Agent Question**: <your question>"\` or explain why manual review/decision is needed.
+   - Mark for developer feedback: \`gh issue edit ${issue.number} --add-label "ready-for-human" --remove-label "ready-for-agent"\` (or \`--add-label "needs-info"\`).
+   - **Immediately conclude execution and exit.** Do not guess or leave the ticket in an untagged open state.
 2. **Follow-up Subtasks**: If you identify distinct out-of-scope work or follow-up subtasks:
    - Create child tickets: \`gh issue create --title "<title>" --body "Parent: #${issue.number}\\nBlocked by: #${issue.number}\\n\\n<details>" --label "ready-for-agent"\`
 3. **PR, Rebase & Merge**:
