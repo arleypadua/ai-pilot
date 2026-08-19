@@ -182,6 +182,11 @@ export class IssueDAG {
     return [];
   }
 
+  public setTargetSpecs(specs: number[]): void {
+    this.config.targetSpecs = specs;
+    delete this.config.targetSpec;
+  }
+
   public getReadyNodes(): DAGNode[] {
     let nodes = this.getAllNodes().filter((n: DAGNode) => n.status === 'ready');
     const targetSpecs = this.getTargetSpecs();

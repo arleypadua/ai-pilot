@@ -287,4 +287,16 @@ export class StateManager {
 
     return { metadata, stdout, stderr };
   }
+
+  public deleteSession(issueNumber: number): void {
+    const sessionDir = path.resolve(this.sessionsDir, `issue-${issueNumber}`);
+    if (fs.existsSync(sessionDir)) {
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      } catch {}
+    }
+    const state = this.getState();
+    delete state.activeTasks[issueNumber];
+    this.saveState(state);
+  }
 }
