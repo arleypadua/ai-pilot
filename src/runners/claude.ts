@@ -49,7 +49,7 @@ export class ClaudeRunner implements AgentRunner {
 
     const guidelines = `### Guidelines & Protocol
 1. **Feedback & Questions**: If you encounter blocking ambiguities or require clarification from the developer:
-   - Post your question: \`gh issue comment ${issue.number} --body "<your question>"\`
+   - Post your question: \`gh issue comment ${issue.number} --body "❓ **Agent Question**: <your question>"\`
    - Mark for developer feedback: \`gh issue edit ${issue.number} --add-label "needs-info" --remove-label "ready-for-agent"\`
    - **Immediately conclude execution and exit.** Do not guess or proceed further. Autopilot will automatically resume this session once the developer responds and re-assigns \`ready-for-agent\`.
 2. **Follow-up Subtasks**: If you identify distinct out-of-scope work or follow-up subtasks:

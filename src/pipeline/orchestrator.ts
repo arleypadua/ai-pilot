@@ -133,12 +133,16 @@ export class Orchestrator {
     const waitingNodes = this.dag.getWaitingFeedbackNodes();
     for (const node of waitingNodes) {
       const issue = node.issue;
-      const lastComment = issue.comments && issue.comments.length > 0 ? issue.comments[issue.comments.length - 1].body : '';
+      const questionComments = issue.comments?.filter((c) => c.body.startsWith('❓ **Agent Question')) || [];
+      const rawQuestion = questionComments.length > 0
+        ? questionComments[questionComments.length - 1].body.replace(/^❓ \*\*Agent Question\*\*:\s*/, '')
+        : (issue.comments && issue.comments.length > 0 ? issue.comments[issue.comments.length - 1].body : '');
+
       const prevComment = this.lastKnownFeedbackQuestions.get(issue.number);
 
-      if (lastComment && lastComment !== prevComment) {
-        this.lastKnownFeedbackQuestions.set(issue.number, lastComment);
-        Notifier.notifyNeedsFeedback(issue.number, issue.title, lastComment);
+      if (rawQuestion && rawQuestion !== prevComment) {
+        this.lastKnownFeedbackQuestions.set(issue.number, rawQuestion);
+        Notifier.notifyNeedsFeedback(issue.number, issue.title, rawQuestion);
         this.dashboard.log(`Notification sent for Issue #${issue.number} (needs info)`);
       }
     }
@@ -226,17 +230,18 @@ export class Orchestrator {
         // Comment failure is non-fatal
       }
 
-      // 3. Check user feedback for continuation (filtering out autopilot bot comments)
+      // 3. Check user feedback for continuation (filtering out bot and agent question comments)
       let userFeedback: string | undefined = undefined;
       if (isContinuation && issue.comments && issue.comments.length > 0) {
-        const humanComments = issue.comments.filter(
-          (c) =>
-            !c.body.startsWith('🤖 **Agent Auto-Pilot') &&
-            !c.body.startsWith('🔄 **Agent Auto-Pilot') &&
-            !c.body.startsWith('🎉 **Spec Complete') &&
-            !c.body.startsWith('⚠️ Agent Auto-Pilot') &&
-            !c.body.startsWith('❌ Agent Auto-Pilot')
-        );
+        const isBotOrAgentComment = (body: string): boolean =>
+          body.startsWith('🤖') ||
+          body.startsWith('🔄') ||
+          body.startsWith('🎉') ||
+          body.startsWith('⚠️') ||
+          body.startsWith('❌') ||
+          body.startsWith('❓ **Agent Question');
+
+        const humanComments = issue.comments.filter((c) => !isBotOrAgentComment(c.body));
         if (humanComments.length > 0) {
           userFeedback = humanComments[humanComments.length - 1].body;
         }

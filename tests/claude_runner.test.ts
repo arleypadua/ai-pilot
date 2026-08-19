@@ -26,6 +26,7 @@ describe('ClaudeRunner', () => {
     expect(prompt).toContain('/implement https://github.com/owner/repo/issues/42');
     expect(prompt).toContain('Create /api/metrics endpoint returning Prometheus format.');
     expect(prompt).toContain('gh issue comment');
+    expect(prompt).toContain('❓ **Agent Question**:');
     expect(prompt).toContain('needs-info');
     expect(prompt).toContain('ready-for-agent');
     expect(prompt).toContain('gh pr create');
