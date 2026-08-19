@@ -57,8 +57,7 @@ ${issue.body || 'No description provided.'}
     const args = [
       '-p',
       prompt,
-      '--allowedTools',
-      '*',
+      '--dangerously-skip-permissions',
     ];
 
     let fullOutput = '';
@@ -66,6 +65,7 @@ ${issue.body || 'No description provided.'}
     try {
       const subprocess = execa('claude', args, {
         cwd: options.cwd,
+        stdin: 'ignore',
         env: {
           ...process.env,
           CI: 'true',
