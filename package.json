@@ -24,12 +24,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/arleypadua/ai-pilot.git"
+    "url": "git+https://github.com/arleypadua/imagos.git"
   },
   "bugs": {
-    "url": "https://github.com/arleypadua/ai-pilot/issues"
+    "url": "https://github.com/arleypadua/imagos/issues"
   },
-  "homepage": "https://github.com/arleypadua/ai-pilot#readme",
+  "homepage": "https://github.com/arleypadua/imagos#readme",
   "keywords": [
     "claude",
     "agent",

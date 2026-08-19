@@ -6,7 +6,7 @@
   "properties": {
     "repository": {
       "type": "string",
-      "description": "Target GitHub repository in 'owner/repo' format (e.g. 'arleypadua/ai-pilot')"
+      "description": "Target GitHub repository in 'owner/repo' format (e.g. 'arleypadua/imagos')"
     },
     "targetSpec": {
       "type": "integer",

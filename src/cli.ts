@@ -47,7 +47,7 @@ program
         process.exit(1);
       }
 
-      console.log(pc.cyan(`Starting Agent Auto-Pilot for ${config.repository}...`));
+      console.log(pc.cyan(`Starting Imagos for ${config.repository}...`));
       const orchestrator = new Orchestrator(config);
 
       const shutdown = () => {

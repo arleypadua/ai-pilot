@@ -28,8 +28,8 @@ npm install -g imagos
 npx imagos --help
 
 # Or install from source
-git clone https://github.com/arleypadua/ai-pilot.git
-cd ai-pilot
+git clone https://github.com/arleypadua/imagos.git
+cd imagos
 pnpm install
 pnpm run build
 pnpm link --global
