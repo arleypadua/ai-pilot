@@ -34,6 +34,7 @@ program
   .option('--specs <specs...>', 'Alias for --spec', parseSpecsOption)
   .option('-m, --concurrency <number>', 'Maximum parallel tasks', parseInt)
   .option('--runner <runner>', 'Runner to use (claude, agy, pi, custom)', 'claude')
+  .option('--no-interactive', 'Disable interactive TUI dashboard (useful for CI/headless environments)')
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
@@ -54,19 +55,41 @@ program
         process.exit(1);
       }
 
-      console.log(pc.cyan(`Starting Imagos for ${config.repository}...`));
       const orchestrator = new Orchestrator(config);
+      const isInteractive = options.interactive !== false && Boolean(process.stdout.isTTY);
 
-      const shutdown = () => {
-        console.log(pc.yellow('\nShutting down gracefully...'));
-        orchestrator.stop();
+      if (isInteractive) {
+        const { startInteractiveDashboard } = await import('./ui/interactive.js');
+        const tui = startInteractiveDashboard(orchestrator, () => {
+          orchestrator.stop();
+          process.exit(0);
+        });
+
+        const shutdown = () => {
+          tui.unmount();
+          orchestrator.stop();
+          process.exit(0);
+        };
+
+        process.on('SIGINT', shutdown);
+        process.on('SIGTERM', shutdown);
+
+        await orchestrator.start();
+        await tui.waitUntilExit();
         process.exit(0);
-      };
+      } else {
+        console.log(pc.cyan(`Starting Imagos for ${config.repository} (headless mode)...`));
+        const shutdown = () => {
+          console.log(pc.yellow('\nShutting down gracefully...'));
+          orchestrator.stop();
+          process.exit(0);
+        };
 
-      process.on('SIGINT', shutdown);
-      process.on('SIGTERM', shutdown);
+        process.on('SIGINT', shutdown);
+        process.on('SIGTERM', shutdown);
 
-      await orchestrator.start();
+        await orchestrator.start();
+      }
     } catch (err: any) {
       console.error(pc.red(`Fatal Error: ${err.message}`));
       process.exit(1);

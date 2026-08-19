@@ -11,4 +11,8 @@ export interface RunnerOptions {
 export interface AgentRunner {
   readonly name: string;
   run(context: TaskContext, options: RunnerOptions): Promise<RunnerResult>;
+  injectPrompt?(issueNumber: number, prompt: string): Promise<boolean>;
+  stop?(issueNumber: number): Promise<void>;
+  pause?(issueNumber: number): boolean;
+  resume?(issueNumber: number): boolean;
 }

@@ -1,3 +1,4 @@
+import { execa } from 'execa';
 import type { AutoPilotConfig, DAGNode } from '../types/index.js';
 import { GitHubClient } from '../github/client.js';
 import { IssueDAG } from '../github/dag.js';
@@ -7,6 +8,7 @@ import { RunnerRegistry } from '../runners/registry.js';
 import { Notifier } from '../notifications/notifier.js';
 import { Dashboard } from '../ui/dashboard.js';
 import { StateManager } from '../state/manager.js';
+import { AgentEventBus } from '../events/bus.js';
 
 export class Orchestrator {
   private config: AutoPilotConfig;
@@ -17,12 +19,17 @@ export class Orchestrator {
   private runners: RunnerRegistry;
   private dashboard: Dashboard;
   private stateMgr: StateManager;
+  private eventBus = AgentEventBus.getInstance();
 
   private isRunning: boolean = false;
+  private isInteractive: boolean = false;
   private pollTimer?: NodeJS.Timeout;
   private activeTaskNumbers: Set<number> = new Set();
   private lastKnownFeedbackQuestions: Map<number, string> = new Map();
   private notifiedSpecCompletions: Set<number> = new Set();
+  private tickListeners: Array<() => void> = [];
+  private latestActiveWorktrees: Array<{ path: string; branch: string; issueNumber?: number }> = [];
+  private isSessionStarted: boolean = true;
 
   constructor(config: AutoPilotConfig) {
     this.config = config;
@@ -33,6 +40,9 @@ export class Orchestrator {
     this.runners = new RunnerRegistry(this.quotaMonitor);
     this.dashboard = new Dashboard(config);
     this.stateMgr = new StateManager();
+
+    // Auto-starts by default (either scoped to specs or resolving to any unblocked task)
+    this.isSessionStarted = true;
 
     // Setup quota event listeners
     this.quotaMonitor.on('quota_paused', ({ resetAt, waitMs }) => {
@@ -48,18 +58,58 @@ export class Orchestrator {
     });
   }
 
+  public setInteractive(interactive: boolean): void {
+    this.isInteractive = interactive;
+  }
+
+  public onTick(listener: () => void): () => void {
+    this.tickListeners.push(listener);
+    return () => {
+      this.tickListeners = this.tickListeners.filter((l) => l !== listener);
+    };
+  }
+
+  public isStarted(): boolean {
+    return this.isSessionStarted;
+  }
+
+  public setTargetSpecs(specs: number[]): void {
+    this.config.targetSpecs = specs;
+    delete this.config.targetSpec;
+    this.dag.setTargetSpecs(specs);
+    this.dashboard.log(
+      specs.length > 0
+        ? `Target scope updated to Spec(s): ${specs.map((s) => `#${s}`).join(', ')}`
+        : 'Target scope updated to any unblocked task (all specs).'
+    );
+    this.tick().catch(() => {});
+  }
+
+  public startSession(specs?: number[]): { success: boolean; message: string } {
+    if (specs !== undefined) {
+      this.setTargetSpecs(specs);
+    }
+    this.isSessionStarted = true;
+    this.stateMgr.updateDaemonStatus('running');
+    return { success: true, message: 'Target spec scope updated successfully.' };
+  }
+
   public async start(): Promise<void> {
     this.isRunning = true;
     this.stateMgr.updateDaemonStatus('running');
-    this.dashboard.log('Agent Auto-Pilot started.');
+
+    const targetSpecs = this.dag.getTargetSpecs();
+    if (targetSpecs.length > 0) {
+      this.dashboard.log(`Agent Auto-Pilot started (scoped to Spec(s): ${targetSpecs.map((s) => `#${s}`).join(', ')})`);
+    } else {
+      this.dashboard.log('Agent Auto-Pilot started (resolving across any unblocked tasks).');
+    }
 
     // Check GitHub Auth
     const isAuthed = await this.gh.checkAuth();
     if (!isAuthed) {
       throw new Error('gh CLI is not authenticated. Please run `gh auth login` first.');
     }
-
-    this.stateMgr.updateDaemonStatus('running');
 
     // Initial fetch of Claude live usage from /usage
     await this.quotaMonitor.fetchLiveUsage(true);
@@ -95,12 +145,22 @@ export class Orchestrator {
     const issues = await this.gh.fetchIssues();
     this.dag.build(issues);
 
-    // 2. Refresh UI Dashboard
-    const activeWorktrees = await this.worktreeMgr.listActiveWorktrees();
-    this.dashboard.render(this.dag, this.quotaMonitor.getStatus(), activeWorktrees);
+    // 2. Refresh UI Dashboard (only clear/render in non-interactive mode)
+    this.latestActiveWorktrees = await this.worktreeMgr.listActiveWorktrees();
+    const activeWorktrees = this.latestActiveWorktrees;
+    if (!this.isInteractive) {
+      this.dashboard.render(this.dag, this.quotaMonitor.getStatus(), activeWorktrees);
+    }
 
-    // 3. If Quota is paused, do not dispatch new tasks
-    if (this.quotaMonitor.getStatus().isPaused) {
+    // Notify tick listeners (for React Ink UI)
+    for (const listener of this.tickListeners) {
+      try {
+        listener();
+      } catch {}
+    }
+
+    // 3. If Quota is paused or session not started yet, do not dispatch new tasks
+    if (this.quotaMonitor.getStatus().isPaused || !this.isSessionStarted) {
       return;
     }
 
@@ -186,7 +246,46 @@ export class Orchestrator {
     }
   }
 
-  private async executeTask(node: DAGNode): Promise<void> {
+  public async injectPrompt(issueNumber: number, prompt: string): Promise<{ success: boolean; message: string }> {
+    this.eventBus.emitAgentEvent({
+      issueNumber,
+      type: 'prompt_injected',
+      summary: `Prompt injected by developer: "${prompt}"`,
+      detail: { prompt },
+    });
+
+    if (this.activeTaskNumbers.has(issueNumber)) {
+      const runner = this.runners.get(this.config.runner);
+      if (runner.injectPrompt) {
+        await runner.injectPrompt(issueNumber, prompt);
+      }
+      return {
+        success: true,
+        message: `Injected prompt for active task #${issueNumber}. Waiting for tool call to finish before safe resume.`,
+      };
+    }
+
+    // If task is not actively running, dispatch it directly with the prompt as user feedback
+    const node = this.dag.getNode(issueNumber);
+    if (node) {
+      this.activeTaskNumbers.add(issueNumber);
+      this.executeTask(node, prompt).finally(() => {
+        this.activeTaskNumbers.delete(issueNumber);
+        this.dashboard.removeWorker(issueNumber);
+      });
+      return {
+        success: true,
+        message: `Resumed task #${issueNumber} with feedback: "${prompt.slice(0, 60)}"`,
+      };
+    }
+
+    return {
+      success: false,
+      message: `Issue #${issueNumber} not found in current issue backlog.`,
+    };
+  }
+
+  private async executeTask(node: DAGNode, overrideFeedback?: string): Promise<void> {
     const { issue } = node;
     const isContinuation = await this.worktreeMgr.worktreeExists(issue.number);
 
@@ -234,9 +333,9 @@ export class Orchestrator {
         // Comment failure is non-fatal
       }
 
-      // 3. Check user feedback for continuation (filtering out bot comments, agent questions, and previously processed replies)
-      let userFeedback: string | undefined = undefined;
-      if (isContinuation && issue.comments && issue.comments.length > 0) {
+      // 3. Check user feedback for continuation
+      let userFeedback: string | undefined = overrideFeedback;
+      if (!userFeedback && isContinuation && issue.comments && issue.comments.length > 0) {
         const isBotOrAgentComment = (body: string): boolean =>
           body.startsWith('🤖') ||
           body.startsWith('🔄') ||
@@ -302,6 +401,14 @@ export class Orchestrator {
           },
         }
       );
+
+      // Check if runner was interrupted to apply developer prompt
+      if (runnerRes.status === 'INTERRUPTED_FOR_PROMPT') {
+        const nextPrompt = runnerRes.injectedPrompt || userFeedback;
+        this.dashboard.log(`Issue #${issue.number} interrupted by developer prompt. Re-executing session with feedback...`);
+        this.stateMgr.recordTaskStage(issue.number, 'PROMPT_RESUMED', 'running', `Resuming with prompt: ${nextPrompt?.slice(0, 80)}`);
+        return this.executeTask(node, nextPrompt);
+      }
 
       // Check if runner paused due to quota
       if (runnerRes.status === 'QUOTA_PAUSED') {
@@ -399,5 +506,124 @@ export class Orchestrator {
 
   public getDAG(): IssueDAG {
     return this.dag;
+  }
+
+  public getQuotaMonitor(): QuotaMonitor {
+    return this.quotaMonitor;
+  }
+
+  public getWorktreeManager(): WorktreeManager {
+    return this.worktreeMgr;
+  }
+
+  public getDashboard(): Dashboard {
+    return this.dashboard;
+  }
+
+  public getStateManager(): StateManager {
+    return this.stateMgr;
+  }
+
+  public getActiveTaskNumbers(): Set<number> {
+    return this.activeTaskNumbers;
+  }
+
+  public getConfig(): AutoPilotConfig {
+    return this.config;
+  }
+
+  public getActiveWorktrees(): Array<{ path: string; branch: string; issueNumber?: number }> {
+    return this.latestActiveWorktrees;
+  }
+
+  public async pauseWorker(issueNumber: number): Promise<{ success: boolean; message: string }> {
+    const runner = this.runners.get(this.config.runner) as any;
+    if (runner && typeof runner.pause === 'function') {
+      const paused = runner.pause(issueNumber);
+      if (paused) {
+        const worker = this.dashboard.getActiveWorkers().get(issueNumber);
+        if (worker) {
+          worker.status = 'paused_quota';
+          this.dashboard.updateWorker(worker);
+        }
+        this.dashboard.log(`Paused worker for Issue #${issueNumber}`);
+        this.eventBus.emitAgentEvent({
+          issueNumber,
+          type: 'info',
+          summary: `⏸️ Worker paused by developer`,
+        });
+        return { success: true, message: `Paused worker for Issue #${issueNumber}` };
+      }
+    }
+    return { success: false, message: `Could not pause worker #${issueNumber} (no active runner process)` };
+  }
+
+  public async resumeWorker(issueNumber: number): Promise<{ success: boolean; message: string }> {
+    const runner = this.runners.get(this.config.runner) as any;
+    if (runner && typeof runner.resume === 'function') {
+      const resumed = runner.resume(issueNumber);
+      if (resumed) {
+        const worker = this.dashboard.getActiveWorkers().get(issueNumber);
+        if (worker) {
+          worker.status = 'running';
+          this.dashboard.updateWorker(worker);
+        }
+        this.dashboard.log(`Resumed worker for Issue #${issueNumber}`);
+        this.eventBus.emitAgentEvent({
+          issueNumber,
+          type: 'info',
+          summary: `▶️ Worker resumed by developer`,
+        });
+        return { success: true, message: `Resumed worker for Issue #${issueNumber}` };
+      }
+    }
+    return { success: false, message: `Could not resume worker #${issueNumber}` };
+  }
+
+  public async killAndWipeWorker(issueNumber: number): Promise<{ success: boolean; message: string }> {
+    const runner = this.runners.get(this.config.runner);
+    if (runner && typeof runner.stop === 'function') {
+      try {
+        await runner.stop(issueNumber);
+      } catch {}
+    }
+
+    this.activeTaskNumbers.delete(issueNumber);
+    this.dashboard.removeWorker(issueNumber);
+
+    try {
+      await this.worktreeMgr.cleanupWorktree(issueNumber, undefined, true);
+    } catch {}
+
+    this.stateMgr.deleteSession(issueNumber);
+
+    this.dashboard.log(`Killed worker and wiped worktree for Issue #${issueNumber}`);
+    this.eventBus.emitAgentEvent({
+      issueNumber,
+      type: 'info',
+      summary: `🛑 Worker killed and worktree wiped by developer`,
+    });
+
+    this.tick().catch(() => {});
+    return { success: true, message: `Killed worker and wiped worktree for Issue #${issueNumber}` };
+  }
+
+  public async openIssueInBrowser(issueNumber: number): Promise<{ success: boolean; message: string }> {
+    try {
+      await execa('gh', ['issue', 'view', String(issueNumber), '--web']);
+      return { success: true, message: `Opened Issue #${issueNumber} in GitHub web browser` };
+    } catch {
+      if (this.config.repository) {
+        const url = `https://github.com/${this.config.repository}/issues/${issueNumber}`;
+        try {
+          const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+          await execa(opener, [url]);
+          return { success: true, message: `Opened Issue #${issueNumber} in browser` };
+        } catch (err: any) {
+          return { success: false, message: `Failed to open browser: ${err.message}` };
+        }
+      }
+      return { success: false, message: `Could not open Issue #${issueNumber}` };
+    }
   }
 }

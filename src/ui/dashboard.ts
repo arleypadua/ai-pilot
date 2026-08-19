@@ -26,9 +26,13 @@ export class Dashboard {
   public log(message: string): void {
     const time = new Date().toLocaleTimeString();
     this.logs.push(`[${time}] ${message}`);
-    if (this.logs.length > 50) {
+    if (this.logs.length > 200) {
       this.logs.shift();
     }
+  }
+
+  public clearLogs(): void {
+    this.logs = [];
   }
 
   public updateWorker(worker: ActiveWorker): void {
@@ -41,6 +45,14 @@ export class Dashboard {
 
   public removeWorker(issueNumber: number): void {
     this.activeWorkers.delete(issueNumber);
+  }
+
+  public getActiveWorkers(): Map<number, ActiveWorker> {
+    return this.activeWorkers;
+  }
+
+  public getLogs(): string[] {
+    return [...this.logs];
   }
 
   private formatDuration(startedAt: Date): string {

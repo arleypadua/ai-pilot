@@ -77,11 +77,12 @@ export interface TaskContext {
 
 export interface RunnerResult {
   success: boolean;
-  status: 'COMPLETED' | 'NEEDS_INFO' | 'QUOTA_PAUSED' | 'FAILED';
+  status: 'COMPLETED' | 'NEEDS_INFO' | 'QUOTA_PAUSED' | 'FAILED' | 'INTERRUPTED_FOR_PROMPT';
   summary?: string;
   feedbackQuestion?: string;
   error?: string;
   quotaResetAt?: Date;
+  injectedPrompt?: string;
 }
 
 export interface AutoPilotConfig {
