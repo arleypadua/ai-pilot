@@ -169,14 +169,31 @@ export class IssueDAG {
     };
   }
 
+  public getTargetSpecs(): number[] {
+    if (this.config.targetSpecs && this.config.targetSpecs.length > 0) {
+      return Array.from(new Set(this.config.targetSpecs));
+    }
+    if (this.config.targetSpec !== undefined) {
+      const specs = Array.isArray(this.config.targetSpec)
+        ? this.config.targetSpec
+        : [this.config.targetSpec];
+      return Array.from(new Set(specs));
+    }
+    return [];
+  }
+
   public getReadyNodes(): DAGNode[] {
     let nodes = this.getAllNodes().filter((n: DAGNode) => n.status === 'ready');
+    const targetSpecs = this.getTargetSpecs();
 
-    if (this.config.targetSpec) {
-      const specNumber = this.config.targetSpec;
-      const childIds = new Set(this.getSpecChildIssueNumbers(specNumber));
-
-      // Filter only nodes that belong to this spec
+    if (targetSpecs.length > 0) {
+      const childIds = new Set<number>();
+      for (const specNumber of targetSpecs) {
+        for (const childId of this.getSpecChildIssueNumbers(specNumber)) {
+          childIds.add(childId);
+        }
+      }
+      // Filter only nodes that belong to any of the target specs
       nodes = nodes.filter((n: DAGNode) => childIds.has(n.issue.number));
     }
 
@@ -185,20 +202,36 @@ export class IssueDAG {
 
   public getBlockedNodes(): DAGNode[] {
     let nodes = this.getAllNodes().filter((n: DAGNode) => n.status === 'blocked');
-    if (this.config.targetSpec) {
-      const childIds = new Set(this.getSpecChildIssueNumbers(this.config.targetSpec));
+    const targetSpecs = this.getTargetSpecs();
+
+    if (targetSpecs.length > 0) {
+      const childIds = new Set<number>();
+      for (const specNumber of targetSpecs) {
+        for (const childId of this.getSpecChildIssueNumbers(specNumber)) {
+          childIds.add(childId);
+        }
+      }
       nodes = nodes.filter((n: DAGNode) => childIds.has(n.issue.number));
     }
+
     return nodes;
   }
 
   public getWaitingFeedbackNodes(): DAGNode[] {
     let nodes = this.getAllNodes().filter((n: DAGNode) => n.status === 'waiting_feedback');
-    if (this.config.targetSpec) {
-      const childIds = new Set(this.getSpecChildIssueNumbers(this.config.targetSpec));
-      childIds.add(this.config.targetSpec); // Also include the spec itself
+    const targetSpecs = this.getTargetSpecs();
+
+    if (targetSpecs.length > 0) {
+      const childIds = new Set<number>();
+      for (const specNumber of targetSpecs) {
+        for (const childId of this.getSpecChildIssueNumbers(specNumber)) {
+          childIds.add(childId);
+        }
+        childIds.add(specNumber); // Also include the spec itself
+      }
       nodes = nodes.filter((n: DAGNode) => childIds.has(n.issue.number));
     }
+
     return nodes;
   }
 

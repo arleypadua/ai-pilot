@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execa } from 'execa';
-import { loadConfig, saveConfig, detectRepository, getConfigPath } from './config/schema.js';
+import { loadConfig, saveConfig, detectRepository, getConfigPath, parseSpecsOption } from './config/schema.js';
 import { Orchestrator } from './pipeline/orchestrator.js';
 import { GitHubClient } from './github/client.js';
 import { IssueDAG } from './github/dag.js';
@@ -14,6 +14,8 @@ import { WorktreeManager } from './worktree/manager.js';
 import { StateManager } from './state/manager.js';
 import type { DAGNode, GitHubLabel } from './types/index.js';
 import Table from 'cli-table3';
+
+export { parseSpecsOption };
 
 const program = new Command();
 
@@ -28,14 +30,19 @@ program
   .description('Start the autonomous orchestrator daemon with live terminal dashboard')
   .option('-c, --config <path>', 'Path to config.json')
   .option('-r, --repo <owner/repo>', 'Target GitHub repository (e.g. owner/repo)')
-  .option('-s, --spec <number>', 'Scope execution strictly to child tickets of a specific Spec issue', parseInt)
+  .option('-s, --spec <specs...>', 'Scope execution strictly to child tickets of specific Spec issue(s)', parseSpecsOption)
+  .option('--specs <specs...>', 'Alias for --spec', parseSpecsOption)
   .option('-m, --concurrency <number>', 'Maximum parallel tasks', parseInt)
   .option('--runner <runner>', 'Runner to use (claude, agy, pi, custom)', 'claude')
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
       if (options.repo) config.repository = options.repo;
-      if (options.spec) config.targetSpec = options.spec;
+      const specOptions = [...(options.spec || []), ...(options.specs || [])];
+      if (specOptions.length > 0) {
+        config.targetSpecs = Array.from(new Set(specOptions));
+        delete config.targetSpec;
+      }
       if (options.concurrency) config.maxConcurrency = options.concurrency;
       if (options.runner) config.runner = options.runner;
 
@@ -113,12 +120,17 @@ program
   .description('Display runtime metadata, active task sessions, worktrees, and DAG')
   .option('-c, --config <path>', 'Path to config.json')
   .option('-R, --repo <owner/repo>', 'Target GitHub repository (e.g. owner/repo)')
-  .option('-s, --spec <number>', 'Scope display strictly to child tickets of a specific Spec issue', parseInt)
+  .option('-s, --spec <specs...>', 'Scope display strictly to child tickets of specific Spec issue(s)', parseSpecsOption)
+  .option('--specs <specs...>', 'Alias for --spec', parseSpecsOption)
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
       if (options.repo) config.repository = options.repo;
-      if (options.spec) config.targetSpec = options.spec;
+      const specOptions = [...(options.spec || []), ...(options.specs || [])];
+      if (specOptions.length > 0) {
+        config.targetSpecs = Array.from(new Set(specOptions));
+        delete config.targetSpec;
+      }
       const stateMgr = new StateManager();
       const runtimeState = stateMgr.getState();
 
@@ -133,6 +145,12 @@ program
 
       console.log(pc.bold(pc.cyan(`\n=== AGENT AUTO-PILOT RUNTIME STATE ===\n`)));
       console.log(`Repository: ${pc.bold(config.repository || 'Local')}`);
+      const targetSpecs = dag.getTargetSpecs();
+      if (targetSpecs.length === 1) {
+        console.log(`Scoped Spec: ${pc.bold(`#${targetSpecs[0]}`)}`);
+      } else if (targetSpecs.length > 1) {
+        console.log(`Scoped Specs: ${pc.bold(targetSpecs.map((s) => `#${s}`).join(', '))}`);
+      }
       console.log(`Daemon Status: ${pc.bold(runtimeState.daemonStatus)}`);
       if (runtimeState.quotaPausedUntil) {
         console.log(pc.red(`Quota Paused Until: ${runtimeState.quotaPausedUntil}`));
@@ -176,7 +194,20 @@ program
         head: [pc.cyan('Issue'), pc.cyan('Title'), pc.cyan('Kind'), pc.cyan('Status'), pc.cyan('Blockers')],
       });
 
-      for (const node of dag.getAllNodes()) {
+      const displayNodes = targetSpecs.length > 0
+        ? dag.getAllNodes().filter((n) => {
+            const childIds = new Set<number>();
+            for (const s of targetSpecs) {
+              for (const c of dag.getSpecChildIssueNumbers(s)) {
+                childIds.add(c);
+              }
+              childIds.add(s);
+            }
+            return childIds.has(n.issue.number);
+          })
+        : dag.getAllNodes();
+
+      for (const node of displayNodes) {
         let statusColor = pc.gray(node.status);
         if (node.status === 'ready') statusColor = pc.green(node.status);
         if (node.status === 'waiting_feedback') statusColor = pc.yellow(node.status);
@@ -351,7 +382,8 @@ program
   .description('Inspect the issue backlog (ready for agent, waiting on human, blocked by deps, etc.)')
   .option('-c, --config <path>', 'Path to config.json')
   .option('-R, --repo <owner/repo>', 'Target GitHub repository (e.g. owner/repo)')
-  .option('-s, --spec <number>', 'Filter backlog strictly to child tickets of a specific Spec issue', parseInt)
+  .option('-s, --spec <specs...>', 'Filter backlog strictly to child tickets of specific Spec issue(s)', parseSpecsOption)
+  .option('--specs <specs...>', 'Alias for --spec', parseSpecsOption)
   .option('-r, --ready', 'Show only issues ready for agent execution')
   .option('-p, --pending', 'Show only issues pending on developer feedback (needs-info / ready-for-human)')
   .option('-b, --blocked', 'Show only issues blocked by dependencies')
@@ -360,18 +392,35 @@ program
     try {
       const config = await loadConfig(options.config);
       if (options.repo) config.repository = options.repo;
-      if (options.spec) config.targetSpec = options.spec;
+      const specOptions = [...(options.spec || []), ...(options.specs || [])];
+      if (specOptions.length > 0) {
+        config.targetSpecs = Array.from(new Set(specOptions));
+        delete config.targetSpec;
+      }
       const gh = new GitHubClient({ repository: config.repository });
       const issues = await gh.fetchIssues();
 
       const dag = new IssueDAG(config);
       dag.build(issues);
 
+      const targetSpecs = dag.getTargetSpecs();
+      const childIds = new Set<number>();
+      if (targetSpecs.length > 0) {
+        for (const s of targetSpecs) {
+          for (const c of dag.getSpecChildIssueNumbers(s)) {
+            childIds.add(c);
+          }
+          childIds.add(s);
+        }
+      }
+
       const allNodes = dag.getAllNodes();
       const readyNodes = dag.getReadyNodes();
       const waitingNodes = dag.getWaitingFeedbackNodes();
       const blockedNodes = dag.getBlockedNodes();
-      const triageNodes = allNodes.filter((n: DAGNode) => n.status === 'pending');
+      const triageNodes = allNodes.filter(
+        (n: DAGNode) => n.status === 'pending' && (targetSpecs.length === 0 || childIds.has(n.issue.number))
+      );
 
       const filterActive = options.ready || options.pending || options.blocked || options.triage;
 
@@ -505,5 +554,9 @@ program
     }
   });
 
-program.parse(process.argv);
+export { program };
+
+if (!process.env.VITEST) {
+  program.parse(process.argv);
+}
 

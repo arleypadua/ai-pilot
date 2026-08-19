@@ -105,8 +105,12 @@ export class Orchestrator {
     }
 
     // 4. Check for Spec Completion
-    if (this.config.targetSpec) {
-      const specNum = this.config.targetSpec;
+    const targetSpecs = this.dag.getTargetSpecs();
+    const specsToCheck = targetSpecs.length > 0
+      ? targetSpecs
+      : this.dag.getAllNodes().filter((n) => n.kind === 'spec' && n.issue.state === 'OPEN').map((n) => n.issue.number);
+
+    for (const specNum of specsToCheck) {
       const specStatus = this.dag.isSpecComplete(specNum);
 
       if (specStatus.isComplete && !this.notifiedSpecCompletions.has(specNum)) {

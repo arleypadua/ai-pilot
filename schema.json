@@ -9,8 +9,18 @@
       "description": "Target GitHub repository in 'owner/repo' format (e.g. 'arleypadua/imagos')"
     },
     "targetSpec": {
-      "type": "integer",
-      "description": "Optional issue number of a Spec to scope execution strictly to its child tickets"
+      "oneOf": [
+        { "type": "integer" },
+        { "type": "array", "items": { "type": "integer" } }
+      ],
+      "description": "Optional issue number(s) of Spec(s) to scope execution strictly to child tickets"
+    },
+    "targetSpecs": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      },
+      "description": "Optional list of Spec issue numbers to scope execution strictly to child tickets"
     },
     "baseBranch": {
       "type": "string",

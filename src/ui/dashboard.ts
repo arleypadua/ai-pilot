@@ -54,7 +54,13 @@ export class Dashboard {
     // Clear screen
     console.clear();
 
-    const specContext = this.config.targetSpec ? ` | Scoped Spec: #${this.config.targetSpec}` : '';
+    const targetSpecs = dag.getTargetSpecs();
+    let specContext = '';
+    if (targetSpecs.length === 1) {
+      specContext = ` | Scoped Spec: #${targetSpecs[0]}`;
+    } else if (targetSpecs.length > 1) {
+      specContext = ` | Scoped Specs: ${targetSpecs.map((s) => `#${s}`).join(', ')}`;
+    }
     const repoContext = this.config.repository ? ` | Repo: ${this.config.repository}` : '';
 
     // Header Banner

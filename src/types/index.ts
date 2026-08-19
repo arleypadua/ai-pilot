@@ -86,7 +86,8 @@ export interface RunnerResult {
 
 export interface AutoPilotConfig {
   repository?: string;
-  targetSpec?: number;
+  targetSpec?: number | number[];
+  targetSpecs?: number[];
   baseBranch: string;
   maxConcurrency: number;
   pollIntervalSeconds: number;

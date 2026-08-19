@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  imagos: 'link:'
+
 importers:
 
   .:
@@ -20,6 +23,9 @@ importers:
       execa:
         specifier: ^9.5.2
         version: 9.6.1
+      imagos:
+        specifier: 'link:'
+        version: 'link:'
       node-notifier:
         specifier: ^10.0.1
         version: 10.0.1

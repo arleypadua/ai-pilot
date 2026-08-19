@@ -6,7 +6,8 @@ import type { AutoPilotConfig } from '../types/index.js';
 
 export const AutoPilotConfigSchema = z.object({
   repository: z.string().optional(),
-  targetSpec: z.number().int().optional(),
+  targetSpec: z.union([z.number().int(), z.array(z.number().int())]).optional(),
+  targetSpecs: z.array(z.number().int()).optional(),
   baseBranch: z.string().default('main'),
   maxConcurrency: z.number().int().min(1).default(2),
   pollIntervalSeconds: z.number().int().min(5).default(30),
@@ -36,6 +37,21 @@ export const AutoPilotConfigSchema = z.object({
 });
 
 export const DEFAULT_CONFIG: AutoPilotConfig = AutoPilotConfigSchema.parse({});
+
+export function parseSpecsOption(value: string | string[], previous: number[] = []): number[] {
+  const values = Array.isArray(value) ? value : [value];
+  const results = [...previous];
+  for (const val of values) {
+    const parts = String(val).split(',');
+    for (const part of parts) {
+      const num = parseInt(part.trim(), 10);
+      if (!isNaN(num) && !results.includes(num)) {
+        results.push(num);
+      }
+    }
+  }
+  return results;
+}
 
 export async function detectRepository(cwd: string = process.cwd()): Promise<string | undefined> {
   try {
