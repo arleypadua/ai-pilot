@@ -4,6 +4,8 @@ import { Command } from 'commander';
 import pc from 'picocolors';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { execa } from 'execa';
 import { loadConfig, saveConfig, detectRepository, getConfigPath } from './config/schema.js';
 import { Orchestrator } from './pipeline/orchestrator.js';
 import { GitHubClient } from './github/client.js';
@@ -231,6 +233,114 @@ program
       console.log(pc.bold(pc.red('\nErrors (stderr):')));
       console.log(session.stderr);
     }
+  });
+
+// 5. INSPECT COMMAND (Live Agent Activity & Git Diff)
+program
+  .command('inspect <issueNumber>')
+  .alias('diff')
+  .description('Inspect what the agent is currently doing (live tool calls, modified files, diff stat)')
+  .action(async (issueNumberStr) => {
+    const issueNumber = parseInt(issueNumberStr, 10);
+    const worktreeMgr = new WorktreeManager();
+    const worktreePath = worktreeMgr.getWorktreePathForIssue(issueNumber);
+
+    console.log(pc.bold(pc.cyan(`\n=== LIVE AGENT INSPECTION: Issue #${issueNumber} ===\n`)));
+
+    if (!fs.existsSync(worktreePath)) {
+      console.log(pc.yellow(`No active worktree found at ${worktreePath}`));
+      return;
+    }
+
+    console.log(`Worktree: ${pc.bold(worktreePath)}`);
+
+    // 1. Git Status & Uncommitted Changes
+    try {
+      const { stdout: statusOut } = await execa('git', ['status', '--short'], { cwd: worktreePath });
+      console.log(pc.bold('\n📁 Modified Files in Worktree:'));
+      if (!statusOut.trim()) {
+        console.log(pc.gray('  No uncommitted file modifications yet.'));
+      } else {
+        console.log(statusOut);
+      }
+
+      const { stdout: diffStat } = await execa('git', ['diff', '--stat'], { cwd: worktreePath });
+      if (diffStat.trim()) {
+        console.log(pc.bold('\n📊 Diff Summary:'));
+        console.log(diffStat);
+      }
+    } catch {
+      // Best effort
+    }
+
+    // 2. Claude Session Inspection from ~/.claude/projects/
+    try {
+      const homeDir = os.homedir();
+      const claudeProjectsDir = path.join(homeDir, '.claude', 'projects');
+      if (fs.existsSync(claudeProjectsDir)) {
+        const sanitizedPath = worktreePath.replace(/\//g, '-');
+        const projectDirs = fs.readdirSync(claudeProjectsDir);
+        const matchDir = projectDirs.find((d) => d.includes(`issue-${issueNumber}`) || d === sanitizedPath);
+
+        if (matchDir) {
+          const fullMatchPath = path.join(claudeProjectsDir, matchDir);
+          const files = fs.readdirSync(fullMatchPath).filter((f) => f.endsWith('.jsonl'));
+          if (files.length > 0) {
+            // Find most recently modified jsonl file
+            const stats = files.map((f) => ({
+              file: f,
+              mtime: fs.statSync(path.join(fullMatchPath, f)).mtimeMs,
+            }));
+            stats.sort((a, b) => b.mtime - a.mtime);
+            const latestJsonl = path.join(fullMatchPath, stats[0].file);
+
+            const content = fs.readFileSync(latestJsonl, 'utf8');
+            const lines = content.split('\n').filter(Boolean);
+            const recentLines = lines.slice(-20);
+
+            console.log(pc.bold('\n⚡ Recent Agent Tool Calls & Activities:'));
+            const activities: string[] = [];
+
+            for (const line of recentLines) {
+              try {
+                const parsed = JSON.parse(line);
+                if (parsed.type === 'assistant' && parsed.message?.content) {
+                  for (const block of parsed.message.content) {
+                    if (block.type === 'tool_use') {
+                      activities.push(
+                        `  🔧 ${pc.cyan(block.name)}: ${JSON.stringify(block.input || {}).slice(0, 100)}`
+                      );
+                    } else if (block.type === 'text' && block.text) {
+                      activities.push(`  💬 ${pc.gray(block.text.slice(0, 120).replace(/\n/g, ' '))}`);
+                    }
+                  }
+                } else if (parsed.type === 'user' && parsed.message?.content) {
+                  for (const block of parsed.message.content) {
+                    if (block.type === 'tool_result' && block.tool_use_id) {
+                      activities.push(`  ✓ ${pc.green('Tool Result received')}`);
+                    }
+                  }
+                }
+              } catch {
+                // Ignore malformed lines
+              }
+            }
+
+            if (activities.length > 0) {
+              const display = activities.slice(-8);
+              for (const act of display) {
+                console.log(act);
+              }
+            } else {
+              console.log(pc.gray('  Agent is analyzing repository context...'));
+            }
+          }
+        }
+      }
+    } catch {
+      // Best effort
+    }
+    console.log('');
   });
 
 // 6. BACKLOG / QUEUE COMMAND
