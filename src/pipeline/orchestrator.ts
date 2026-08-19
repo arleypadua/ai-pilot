@@ -140,7 +140,10 @@ export class Orchestrator {
     }
 
     // 6. Schedule Ready Tasks up to maxConcurrency (with Proactive Quota Pacing)
-    const quotaStatus = this.quotaMonitor.getStatus(this.config.quota.utilizationThreshold);
+    const quotaStatus = this.quotaMonitor.getStatus(
+      this.config.quota.utilizationThreshold,
+      this.config.quota.tokenCeiling
+    );
     if (quotaStatus.rollingStats?.isApproachingLimit) {
       const stats = quotaStatus.rollingStats;
       const rollOffTimeStr = stats.nextRollOffAt ? stats.nextRollOffAt.toLocaleTimeString() : 'soon';

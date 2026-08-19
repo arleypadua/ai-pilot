@@ -464,7 +464,7 @@ program
     }
   });
 
-// 5. CLEAN COMMAND
+// 7. CLEAN COMMAND
 program
   .command('clean')
   .description('Clean up all inactive worktrees and temporary agent branches')
@@ -483,6 +483,23 @@ program
       console.log(pc.green('✓ All agent worktrees cleaned up.'));
     } catch (err: any) {
       console.error(pc.red(`Clean error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// 8. RESUME / UNPAUSE COMMAND
+program
+  .command('resume')
+  .alias('unpause')
+  .description('Instantly clear quota pause and force immediate task execution (e.g. after plan upgrade)')
+  .action(() => {
+    try {
+      const stateMgr = new StateManager();
+      stateMgr.updateDaemonStatus('running', undefined);
+      console.log(pc.green('✓ Quota pause cleared. Daemon status set to running.'));
+      console.log(pc.cyan('The orchestrator will immediately resume dispatching tasks without waiting.'));
+    } catch (err: any) {
+      console.error(pc.red(`Resume error: ${err.message}`));
       process.exit(1);
     }
   });

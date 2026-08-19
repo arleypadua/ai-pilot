@@ -97,6 +97,7 @@ export interface AutoPilotConfig {
   quota: {
     pauseOnLimit: boolean;
     utilizationThreshold: number;
+    tokenCeiling?: number;
     proxyPort?: number;
   };
   labels: {

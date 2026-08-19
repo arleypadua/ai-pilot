@@ -279,8 +279,8 @@ export class QuotaMonitor extends EventEmitter {
     };
   }
 
-  public getStatus(utilizationThreshold: number = 0.85): QuotaStatus {
-    const rollingStats = this.scanRollingWindowUsage(utilizationThreshold);
+  public getStatus(utilizationThreshold: number = 0.85, customCeiling?: number): QuotaStatus {
+    const rollingStats = this.scanRollingWindowUsage(utilizationThreshold, customCeiling);
 
     return {
       isPaused: this.isPaused,
