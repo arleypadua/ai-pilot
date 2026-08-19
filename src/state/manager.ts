@@ -18,6 +18,7 @@ export interface TaskSessionMetadata {
   error?: string;
   prUrl?: string;
   prNumber?: number;
+  lastProcessedCommentId?: string;
   timeline: Array<{
     timestamp: string;
     stage: string;
@@ -115,8 +116,17 @@ export class StateManager {
     sessionId?: string;
   }): TaskSessionMetadata {
     const sessionDir = this.getSessionDir(metadata.issueNumber);
+    const sessionFile = path.resolve(sessionDir, 'session.json');
     const now = new Date().toISOString();
     const sessionId = metadata.sessionId || `session-issue-${metadata.issueNumber}-${Date.now().toString(36)}`;
+
+    let previousCommentId: string | undefined = undefined;
+    if (fs.existsSync(sessionFile)) {
+      try {
+        const prev = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
+        previousCommentId = prev.lastProcessedCommentId;
+      } catch {}
+    }
 
     const session: TaskSessionMetadata = {
       ...metadata,
@@ -124,6 +134,7 @@ export class StateManager {
       status: 'running',
       startedAt: now,
       updatedAt: now,
+      lastProcessedCommentId: previousCommentId,
       timeline: [
         {
           timestamp: now,
@@ -184,6 +195,29 @@ export class StateManager {
     if (state.activeTasks[issueNumber]) {
       state.activeTasks[issueNumber] = session;
       this.saveState(state);
+    }
+  }
+
+  public recordProcessedComment(issueNumber: number, commentId: string): void {
+    const sessionDir = this.getSessionDir(issueNumber);
+    const sessionFile = path.resolve(sessionDir, 'session.json');
+    const now = new Date().toISOString();
+
+    if (fs.existsSync(sessionFile)) {
+      try {
+        const session: TaskSessionMetadata = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
+        session.lastProcessedCommentId = commentId;
+        session.updatedAt = now;
+        fs.writeFileSync(sessionFile, JSON.stringify(session, null, 2), 'utf8');
+
+        const state = this.getState();
+        if (state.activeTasks[issueNumber]) {
+          state.activeTasks[issueNumber].lastProcessedCommentId = commentId;
+          this.saveState(state);
+        }
+      } catch {
+        // Best effort
+      }
     }
   }
 

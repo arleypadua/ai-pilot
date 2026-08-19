@@ -50,4 +50,32 @@ describe('StateManager', () => {
     expect(finalState.recentHistory.length).toBe(1);
     expect(finalState.recentHistory[0].issueNumber).toBe(99);
   });
+
+  it('should record and preserve lastProcessedCommentId across session restarts', () => {
+    const stateMgr = new StateManager(tmpDir);
+
+    stateMgr.startTaskSession({
+      issueNumber: 100,
+      title: 'Fix auth cookies',
+      branchName: 'agent/issue-100',
+      worktreePath: path.join(tmpDir, '.autopilot', 'worktrees', 'issue-100'),
+      runner: 'claude',
+    });
+
+    stateMgr.recordProcessedComment(100, 'comment_abc_123');
+
+    let session = stateMgr.getSession(100);
+    expect(session.metadata?.lastProcessedCommentId).toBe('comment_abc_123');
+
+    // Simulate session continuation/restart
+    const resumedSession = stateMgr.startTaskSession({
+      issueNumber: 100,
+      title: 'Fix auth cookies',
+      branchName: 'agent/issue-100',
+      worktreePath: path.join(tmpDir, '.autopilot', 'worktrees', 'issue-100'),
+      runner: 'claude',
+    });
+
+    expect(resumedSession.lastProcessedCommentId).toBe('comment_abc_123');
+  });
 });

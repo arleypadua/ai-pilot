@@ -121,6 +121,34 @@ export class GitHubClient {
     await execa('gh', args, { cwd: this.cwd });
   }
 
+  public async addCommentReaction(
+    commentId: string,
+    content: 'EYES' | 'ROCKET' | 'THUMBS_UP' = 'EYES'
+  ): Promise<void> {
+    try {
+      if (commentId.startsWith('IC_') || commentId.length > 15) {
+        const query = `mutation($subjectId: ID!, $content: ReactionContent!) {
+          addReaction(input: { subjectId: $subjectId, content: $content }) {
+            reaction { content }
+          }
+        }`;
+        await execa(
+          'gh',
+          ['api', 'graphql', '-f', `query=${query}`, '-F', `subjectId=${commentId}`, '-F', `content=${content}`],
+          { cwd: this.cwd }
+        );
+      } else {
+        const restContent = content === 'EYES' ? 'eyes' : content === 'ROCKET' ? 'rocket' : '+1';
+        const endpoint = this.repository
+          ? `repos/${this.repository}/issues/comments/${commentId}/reactions`
+          : `repos/:owner/:repo/issues/comments/${commentId}/reactions`;
+        await execa('gh', ['api', endpoint, '-f', `content=${restContent}`], { cwd: this.cwd });
+      }
+    } catch {
+      // Best-effort reaction; non-fatal if permissions or network fail
+    }
+  }
+
   public async closeIssue(issueNumber: number, comment?: string): Promise<void> {
     if (comment) {
       await this.addComment(issueNumber, comment);

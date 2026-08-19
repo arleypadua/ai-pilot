@@ -230,7 +230,7 @@ export class Orchestrator {
         // Comment failure is non-fatal
       }
 
-      // 3. Check user feedback for continuation (filtering out bot and agent question comments)
+      // 3. Check user feedback for continuation (filtering out bot comments, agent questions, and previously processed replies)
       let userFeedback: string | undefined = undefined;
       if (isContinuation && issue.comments && issue.comments.length > 0) {
         const isBotOrAgentComment = (body: string): boolean =>
@@ -241,9 +241,31 @@ export class Orchestrator {
           body.startsWith('❌') ||
           body.startsWith('❓ **Agent Question');
 
-        const humanComments = issue.comments.filter((c) => !isBotOrAgentComment(c.body));
-        if (humanComments.length > 0) {
-          userFeedback = humanComments[humanComments.length - 1].body;
+        // Find the latest question asked by the agent (if any)
+        const questionComments = issue.comments.filter((c) => c.body.startsWith('❓ **Agent Question'));
+        const latestQuestion = questionComments.length > 0 ? questionComments[questionComments.length - 1] : undefined;
+        const questionTime = latestQuestion ? new Date(latestQuestion.createdAt).getTime() : 0;
+
+        const previousSession = this.stateMgr.getSession(issue.number);
+        const lastProcessedCommentId = previousSession.metadata?.lastProcessedCommentId;
+
+        // Filter to only new, unhandled human replies created after the latest question
+        const newReplies = issue.comments.filter((c) => {
+          if (isBotOrAgentComment(c.body)) return false;
+          if (lastProcessedCommentId && c.id === lastProcessedCommentId) return false;
+          if (latestQuestion && new Date(c.createdAt).getTime() <= questionTime) return false;
+          return true;
+        });
+
+        if (newReplies.length > 0) {
+          const latestReply = newReplies[newReplies.length - 1];
+          userFeedback = latestReply.body;
+
+          // Record processed comment ID in state
+          this.stateMgr.recordProcessedComment(issue.number, latestReply.id);
+
+          // Acknowledge developer feedback with 'EYES' reaction on GitHub
+          await this.gh.addCommentReaction(latestReply.id, 'EYES');
         }
       }
 
