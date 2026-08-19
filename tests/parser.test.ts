@@ -38,28 +38,54 @@ describe('parseIssueDependencies', () => {
     expect(deps.kind).toBe('ticket');
   });
 
-  it('should identify spec issues with child checklists', () => {
+  it('should parse markdown header sections with markdown links like ## Blocked by\\n\\n[#222](url)', () => {
     const issue: GitHubIssue = {
-      number: 50,
-      title: '[Spec] Authentication and User Management System',
-      body: `## Acceptance Criteria
-- Support JWT auth
-- Password hashing
+      number: 223,
+      title: "Declare the guest's JS surface: shim MessageChannel",
+      body: `## Acceptance criteria
 
-### Subtasks
-- [ ] #51
-- [ ] #52
-- [x] #53
+- [ ] A guest whose module constructs MessageChannel evaluates
+
+## Blocked by
+
+[#222](https://github.com/wawesomeio/wawesome-monorepo/issues/222) — declaring that gaps "fail loudly" is not true while a module-scope ReferenceError reaches the Tenant as Exited with i32 exit status 1.
+
+## Related
+
+- [#185](https://github.com/wawesomeio/wawesome-monorepo/issues/185)
 `,
       state: 'OPEN',
       labels: [{ name: 'ready-for-agent' }],
-      url: 'https://github.com/owner/repo/issues/50',
+      url: 'https://github.com/wawesomeio/wawesome-monorepo/issues/223',
       createdAt: '2026-08-19T10:00:00Z',
       updatedAt: '2026-08-19T10:00:00Z',
     };
 
     const deps = parseIssueDependencies(issue);
-    expect(deps.kind).toBe('spec');
-    expect(deps.subTaskNumbers).toEqual([51, 52, 53]);
+    expect(deps.blockers).toContain(222);
+  });
+
+  it('should parse parent header sections like ## Parent\\n\\n#17', () => {
+    const issue: GitHubIssue = {
+      number: 35,
+      title: 'Follow-up to #31: cross-instance eviction robustness',
+      body: `## Parent
+
+#17 — Real-time log streaming & storage for Function invocations
+
+## Context
+
+Follow-up to #31.
+`,
+      state: 'OPEN',
+      labels: [{ name: 'ready-for-agent' }],
+      url: 'https://github.com/wawesomeio/wawesome-monorepo/issues/35',
+      createdAt: '2026-08-19T10:00:00Z',
+      updatedAt: '2026-08-19T10:00:00Z',
+    };
+
+    const deps = parseIssueDependencies(issue);
+    expect(deps.parentNumber).toBe(17);
+    expect(deps.kind).toBe('ticket');
   });
 });

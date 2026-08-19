@@ -110,10 +110,12 @@ program
   .command('status')
   .description('Display runtime metadata, active task sessions, worktrees, and DAG')
   .option('-c, --config <path>', 'Path to config.json')
+  .option('-R, --repo <owner/repo>', 'Target GitHub repository (e.g. owner/repo)')
   .option('-s, --spec <number>', 'Scope display strictly to child tickets of a specific Spec issue', parseInt)
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
+      if (options.repo) config.repository = options.repo;
       if (options.spec) config.targetSpec = options.spec;
       const stateMgr = new StateManager();
       const runtimeState = stateMgr.getState();
@@ -238,6 +240,7 @@ program
   .alias('queue')
   .description('Inspect the issue backlog (ready for agent, waiting on human, blocked by deps, etc.)')
   .option('-c, --config <path>', 'Path to config.json')
+  .option('-R, --repo <owner/repo>', 'Target GitHub repository (e.g. owner/repo)')
   .option('-s, --spec <number>', 'Filter backlog strictly to child tickets of a specific Spec issue', parseInt)
   .option('-r, --ready', 'Show only issues ready for agent execution')
   .option('-p, --pending', 'Show only issues pending on developer feedback (needs-info / ready-for-human)')
@@ -246,6 +249,7 @@ program
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
+      if (options.repo) config.repository = options.repo;
       if (options.spec) config.targetSpec = options.spec;
       const gh = new GitHubClient({ repository: config.repository });
       const issues = await gh.fetchIssues();
