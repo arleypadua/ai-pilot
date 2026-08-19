@@ -25,6 +25,9 @@
     "version-packages": "changeset version",
     "release": "pnpm build && changeset publish"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/arleypadua/imagos.git"
