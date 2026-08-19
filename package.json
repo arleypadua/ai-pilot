@@ -16,6 +16,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "ci": "pnpm test && pnpm build && npm pack --dry-run",
     "start": "tsx src/cli.ts",
     "dev": "tsx watch src/cli.ts",
     "test": "vitest run",
