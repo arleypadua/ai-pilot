@@ -1,4 +1,22 @@
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+
+export interface RollingWindowStats {
+  turnsCount: number;
+  totalOutputTokens: number;
+  totalInputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheCreateTokens: number;
+  earliestTurnTimestamp?: number;
+  nextRollOffAt?: Date;
+  tokensExpiringInNextHour: number;
+  burnRatePerMinute: number;
+  estimatedCeiling: number;
+  utilization: number;
+  isApproachingLimit: boolean;
+}
 
 export interface QuotaStatus {
   isPaused: boolean;
@@ -6,6 +24,7 @@ export interface QuotaStatus {
   resetAt?: Date;
   reason?: string;
   activePids: number[];
+  rollingStats?: RollingWindowStats;
 }
 
 export class QuotaMonitor extends EventEmitter {
@@ -163,13 +182,113 @@ export class QuotaMonitor extends EventEmitter {
     this.emit('quota_resumed', { resumedAt: new Date(), previousResetAt });
   }
 
-  public getStatus(): QuotaStatus {
+  public scanRollingWindowUsage(
+    utilizationThreshold: number = 0.85,
+    customCeiling?: number
+  ): RollingWindowStats {
+    const fiveHoursMs = 5 * 60 * 60 * 1000;
+    const windowStart = Date.now() - fiveHoursMs;
+    const thirtyMinsAgo = Date.now() - 30 * 60 * 1000;
+    const oneHourFromNow = Date.now() + 60 * 60 * 1000;
+
+    let totalInput = 0;
+    let totalOutput = 0;
+    let totalCacheRead = 0;
+    let totalCacheCreate = 0;
+    let recentTokens = 0;
+    let tokensExpiringNextHour = 0;
+    let earliestTurnTimestamp: number | undefined = undefined;
+    let turnsCount = 0;
+
+    try {
+      const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+      if (fs.existsSync(claudeDir)) {
+        const scanDir = (dir: string) => {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              scanDir(fullPath);
+            } else if (entry.name.endsWith('.jsonl')) {
+              try {
+                const stat = fs.statSync(fullPath);
+                if (stat.mtimeMs >= windowStart) {
+                  const content = fs.readFileSync(fullPath, 'utf8');
+                  const lines = content.split('\n');
+                  for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                      const data = JSON.parse(line);
+                      if (data.timestamp && data.message?.usage) {
+                        const ts = new Date(data.timestamp).getTime();
+                        if (ts >= windowStart) {
+                          const u = data.message.usage;
+                          const output = u.output_tokens || 0;
+                          totalInput += u.input_tokens || 0;
+                          totalOutput += output;
+                          totalCacheRead += u.cache_read_input_tokens || 0;
+                          totalCacheCreate += u.cache_creation_input_tokens || 0;
+                          turnsCount++;
+
+                          if (!earliestTurnTimestamp || ts < earliestTurnTimestamp) {
+                            earliestTurnTimestamp = ts;
+                          }
+
+                          if (ts >= thirtyMinsAgo) {
+                            recentTokens += output;
+                          }
+
+                          // If this turn will roll off in the next 1 hour:
+                          const rollOffTime = ts + fiveHoursMs;
+                          if (rollOffTime <= oneHourFromNow) {
+                            tokensExpiringNextHour += output;
+                          }
+                        }
+                      }
+                    } catch {}
+                  }
+                }
+              } catch {}
+            }
+          }
+        };
+
+        scanDir(claudeDir);
+      }
+    } catch {}
+
+    const estimatedCeiling = customCeiling || 300000;
+    const utilization = Math.min(1.0, totalOutput / estimatedCeiling);
+    const isApproachingLimit = utilization >= utilizationThreshold;
+    const nextRollOffAt = earliestTurnTimestamp ? new Date(earliestTurnTimestamp + fiveHoursMs) : undefined;
+    const burnRatePerMinute = Math.round(recentTokens / 30);
+
+    return {
+      turnsCount,
+      totalOutputTokens: totalOutput,
+      totalInputTokens: totalInput,
+      totalCacheReadTokens: totalCacheRead,
+      totalCacheCreateTokens: totalCacheCreate,
+      earliestTurnTimestamp,
+      nextRollOffAt,
+      tokensExpiringInNextHour: tokensExpiringNextHour,
+      burnRatePerMinute,
+      estimatedCeiling,
+      utilization,
+      isApproachingLimit,
+    };
+  }
+
+  public getStatus(utilizationThreshold: number = 0.85): QuotaStatus {
+    const rollingStats = this.scanRollingWindowUsage(utilizationThreshold);
+
     return {
       isPaused: this.isPaused,
       pausedAt: this.pausedAt,
       resetAt: this.resetAt,
       reason: this.pauseReason,
       activePids: Array.from(this.activePids),
+      rollingStats,
     };
   }
 

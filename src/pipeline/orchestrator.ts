@@ -139,7 +139,17 @@ export class Orchestrator {
       }
     }
 
-    // 6. Schedule Ready Tasks up to maxConcurrency
+    // 6. Schedule Ready Tasks up to maxConcurrency (with Proactive Quota Pacing)
+    const quotaStatus = this.quotaMonitor.getStatus(this.config.quota.utilizationThreshold);
+    if (quotaStatus.rollingStats?.isApproachingLimit) {
+      const stats = quotaStatus.rollingStats;
+      const rollOffTimeStr = stats.nextRollOffAt ? stats.nextRollOffAt.toLocaleTimeString() : 'soon';
+      this.dashboard.log(
+        `⏳ Pacing Quota: 5h window at ${Math.round(stats.utilization * 100)}% (${Math.round(stats.totalOutputTokens / 1000)}k/${Math.round(stats.estimatedCeiling / 1000)}k tokens). Waiting for roll-off at ${rollOffTimeStr}.`
+      );
+      return;
+    }
+
     const readyNodes = this.dag.getReadyNodes();
     const availableSlots = this.config.maxConcurrency - this.activeTaskNumbers.size;
 

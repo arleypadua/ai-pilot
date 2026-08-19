@@ -60,13 +60,37 @@ export class Dashboard {
         `Concurrency: ${this.activeWorkers.size}/${this.config.maxConcurrency}`
     );
 
-    // Quota Status Banner
+    // Quota Status Banner & 5h Rolling Token Meter
     if (quotaStatus.isPaused && quotaStatus.resetAt) {
       const remainingMs = Math.max(0, quotaStatus.resetAt.getTime() - Date.now());
       const remainingMins = Math.ceil(remainingMs / (60 * 1000));
       console.log(
         pc.bgRed(pc.white(pc.bold(' ⏳ 5-HOUR QUOTA PAUSED '))) +
           pc.red(` Resumes at ${quotaStatus.resetAt.toLocaleTimeString()} (~${remainingMins} min remaining)`)
+      );
+    } else if (quotaStatus.rollingStats) {
+      const stats = quotaStatus.rollingStats;
+      const pct = Math.round(stats.utilization * 100);
+      const usedK = Math.round(stats.totalOutputTokens / 1000);
+      const capK = Math.round(stats.estimatedCeiling / 1000);
+
+      const barLen = 15;
+      const filled = Math.min(barLen, Math.round((pct / 100) * barLen));
+      const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, barLen - filled));
+
+      let meterColor = pc.green;
+      if (pct >= 85) meterColor = pc.red;
+      else if (pct >= 70) meterColor = pc.yellow;
+
+      let extraInfo = `| Burn: ${stats.burnRatePerMinute} tok/min`;
+      if (stats.nextRollOffAt) {
+        const rollOffMin = Math.max(0, Math.round((stats.nextRollOffAt.getTime() - Date.now()) / (60 * 1000)));
+        extraInfo += ` | Oldest roll-off in ~${rollOffMin}m`;
+      }
+
+      console.log(
+        meterColor(`● 5h Rolling Quota: [${bar}] ${pct}% (${usedK}k / ${capK}k output tokens) `) +
+          pc.gray(extraInfo)
       );
     } else {
       console.log(pc.green('● Quota Status: Normal (5h window healthy)'));
