@@ -1,7 +1,8 @@
 import Table from 'cli-table3';
 import pc from 'picocolors';
-import type { AutoPilotConfig, DAGNode, TaskStatus } from '../types/index.js';
+import type { AutoPilotConfig, TaskStatus } from '../types/index.js';
 import type { QuotaStatus } from '../quota/monitor.js';
+import type { IssueDAG } from '../github/dag.js';
 
 export interface ActiveWorker {
   issueNumber: number;
@@ -44,7 +45,7 @@ export class Dashboard {
     return `${m}m ${s}s`;
   }
 
-  public render(dagNodes: DAGNode[], quotaStatus: QuotaStatus): void {
+  public render(dag: IssueDAG, quotaStatus: QuotaStatus): void {
     // Clear screen
     process.stdout.write('\x1Bc');
 
@@ -111,9 +112,9 @@ export class Dashboard {
     console.log('');
 
     // 2. Ready & Blocked Issues Summary
-    const ready = dagNodes.filter((n) => n.status === 'ready');
-    const blocked = dagNodes.filter((n) => n.status === 'blocked');
-    const feedback = dagNodes.filter((n) => n.status === 'waiting_feedback');
+    const ready = dag.getReadyNodes();
+    const blocked = dag.getBlockedNodes();
+    const feedback = dag.getWaitingFeedbackNodes();
 
     const queueTable = new Table({
       head: [pc.cyan('Status'), pc.cyan('Count'), pc.cyan('Issues')],

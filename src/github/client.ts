@@ -61,6 +61,24 @@ export class GitHubClient {
     return JSON.parse(stdout) as GitHubIssue;
   }
 
+  public async ensureLabelExists(labelName: string): Promise<void> {
+    try {
+      const colors: Record<string, string> = {
+        'ready-for-agent': '0E8A16',
+        'needs-info': 'D93F0B',
+        'ready-for-human': 'B60205',
+        'needs-triage': 'FBCA04',
+        'wontfix': 'FFFFFF',
+      };
+      const color = colors[labelName] || 'EDEDED';
+      await execa('gh', ['label', 'create', labelName, ...this.repoArgs(), '--color', color, '--force'], {
+        cwd: this.cwd,
+      });
+    } catch {
+      // Label may already exist or lack permission
+    }
+  }
+
   public async editIssueLabels(
     issueNumber: number,
     options: { add?: string[]; remove?: string[] }
@@ -79,7 +97,23 @@ export class GitHubClient {
       }
     }
 
-    await execa('gh', args, { cwd: this.cwd });
+    try {
+      await execa('gh', args, { cwd: this.cwd });
+    } catch (err: any) {
+      // If label not found, try creating the label and retry once
+      if (options.add && options.add.length > 0) {
+        for (const label of options.add) {
+          await this.ensureLabelExists(label);
+        }
+        try {
+          await execa('gh', args, { cwd: this.cwd });
+          return;
+        } catch {
+          // Log failure gracefully without crashing caller
+          console.warn(`Warning: Could not update labels for issue #${issueNumber}: ${err.message}`);
+        }
+      }
+    }
   }
 
   public async addComment(issueNumber: number, body: string): Promise<void> {
