@@ -1,0 +1,45 @@
+{
+  "name": "agent-autopilot",
+  "version": "0.1.0",
+  "description": "Autonomous multi-agent GitHub issue orchestrator powered by Claude CLI, git worktrees, DAG scheduling, and 5h rolling quota management",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "agent-autopilot": "./dist/cli.js",
+    "autopilot": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/cli.ts",
+    "dev": "tsx watch src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "claude",
+    "agent",
+    "github-issues",
+    "worktree",
+    "orchestrator",
+    "dag",
+    "autonomous-coding"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cli-table3": "^0.6.5",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "execa": "^9.5.2",
+    "node-notifier": "^10.0.1",
+    "picocolors": "^1.1.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "@types/node-notifier": "^8.0.5",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.6"
+  }
+}
