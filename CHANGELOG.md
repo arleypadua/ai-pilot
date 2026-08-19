@@ -1,5 +1,11 @@
 # imagos
 
+## 0.2.2
+
+### Patch Changes
+
+- d7f0b1f: docs: revamp README with comprehensive guide for Claude and Antigravity (agy) runners, runner label routing and fallback, multi-spec scoping, and quota management.
+
 ## 0.2.1
 
 ### Patch Changes
