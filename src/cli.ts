@@ -18,7 +18,7 @@ import Table from 'cli-table3';
 const program = new Command();
 
 program
-  .name('agent-autopilot')
+  .name('ai-pilot')
   .description('Autonomous multi-agent GitHub issue orchestrator powered by Claude CLI & git worktrees')
   .version('0.1.0');
 

@@ -1,4 +1,4 @@
-# Agent Auto-Pilot (⚡ `agent-autopilot`)
+# AI-Pilot (⚡ `ai-pilot`)
 
 Autonomous, multi-task GitHub issue orchestrator powered by Claude CLI, git worktrees, DAG scheduling, and subscription rolling quota management.
 
@@ -20,13 +20,16 @@ Designed to autonomously execute "grilled work" (issues tagged `ready-for-agent`
 ## Installation & Setup
 
 ```bash
-# Clone and install dependencies
-git clone <your-repo>
-cd agent-auto-pilot
+# Global install via npm / pnpm
+npm install -g ai-pilot
+# or run directly with npx
+npx ai-pilot --help
+
+# Or install from source
+git clone https://github.com/arleypadua/ai-pilot.git
+cd ai-pilot
 pnpm install
 pnpm run build
-
-# Link globally or run directly
 pnpm link --global
 ```
 
@@ -40,7 +43,7 @@ Ensure you have:
 
 ### 1. Initialize configuration for your repository
 ```bash
-agent-autopilot init --repo owner/repo
+ai-pilot init --repo owner/repo
 ```
 
 This generates `autopilot.config.json`:
@@ -70,17 +73,17 @@ This generates `autopilot.config.json`:
 
 ### 2. Start the autonomous daemon
 ```bash
-agent-autopilot start
+ai-pilot start
 ```
 
 ### 3. Check current DAG status & active worktrees
 ```bash
-agent-autopilot status
+ai-pilot status
 ```
 
 ### 4. Clean up inactive worktrees and branches
 ```bash
-agent-autopilot clean
+ai-pilot clean
 ```
 
 ---

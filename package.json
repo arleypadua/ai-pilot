@@ -1,12 +1,13 @@
 {
-  "name": "agent-autopilot",
+  "name": "ai-pilot",
   "version": "0.1.0",
   "description": "Autonomous multi-agent GitHub issue orchestrator powered by Claude CLI, git worktrees, DAG scheduling, and 5h rolling quota management",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "agent-autopilot": "./dist/cli.js",
-    "autopilot": "./dist/cli.js"
+    "ai-pilot": "./dist/cli.js",
+    "autopilot": "./dist/cli.js",
+    "agent-autopilot": "./dist/cli.js"
   },
   "files": [
     "dist",
