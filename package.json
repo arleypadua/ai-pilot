@@ -20,7 +20,10 @@
     "dev": "tsx watch src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "pnpm run build && pnpm test"
+    "prepublishOnly": "pnpm run build && pnpm test",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm build && changeset publish"
   },
   "repository": {
     "type": "git",
@@ -51,6 +54,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@changesets/cli": "^3.0.0",
     "@types/node": "^22.13.5",
     "@types/node-notifier": "^8.0.5",
     "tsx": "^4.19.3",
