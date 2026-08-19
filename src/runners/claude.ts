@@ -1,7 +1,35 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { execa } from 'execa';
 import type { RunnerResult, TaskContext } from '../types/index.js';
 import type { AgentRunner, RunnerOptions } from './base.js';
 import { QuotaMonitor } from '../quota/monitor.js';
+
+function findLatestClaudeSessionId(worktreePath: string): string | undefined {
+  try {
+    const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
+    if (!fs.existsSync(claudeProjectsDir)) return undefined;
+
+    const sanitizedPath = worktreePath.replace(/\//g, '-');
+    const projectDirs = fs.readdirSync(claudeProjectsDir);
+    const matchDir = projectDirs.find((d) => d.includes(path.basename(worktreePath)) || d === sanitizedPath);
+
+    if (matchDir) {
+      const fullMatchPath = path.join(claudeProjectsDir, matchDir);
+      const files = fs.readdirSync(fullMatchPath).filter((f) => f.endsWith('.jsonl'));
+      if (files.length > 0) {
+        const stats = files.map((f) => ({
+          file: f,
+          mtime: fs.statSync(path.join(fullMatchPath, f)).mtimeMs,
+        }));
+        stats.sort((a, b) => b.mtime - a.mtime);
+        return stats[0].file.replace(/\.jsonl$/, '');
+      }
+    }
+  } catch {}
+  return undefined;
+}
 
 export class ClaudeRunner implements AgentRunner {
   public readonly name = 'claude';
@@ -59,6 +87,13 @@ ${issue.body || 'No description provided.'}
       prompt,
       '--dangerously-skip-permissions',
     ];
+
+    if (context.isContinuation) {
+      const previousSessionId = findLatestClaudeSessionId(options.cwd);
+      if (previousSessionId) {
+        args.unshift('--resume', previousSessionId);
+      }
+    }
 
     let fullOutput = '';
 
