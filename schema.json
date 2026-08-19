@@ -1,0 +1,117 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AutoPilotConfig",
+  "description": "Configuration schema for Agent Auto-Pilot",
+  "type": "object",
+  "properties": {
+    "repository": {
+      "type": "string",
+      "description": "Target GitHub repository in 'owner/repo' format (e.g. 'arleypadua/ai-pilot')"
+    },
+    "baseBranch": {
+      "type": "string",
+      "default": "main",
+      "description": "The base branch to branch off of and merge PRs into"
+    },
+    "maxConcurrency": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 2,
+      "description": "Maximum number of parallel agent worktrees to run simultaneously"
+    },
+    "pollIntervalSeconds": {
+      "type": "integer",
+      "minimum": 5,
+      "default": 30,
+      "description": "Frequency in seconds to poll GitHub issues"
+    },
+    "runner": {
+      "type": "string",
+      "enum": ["claude", "agy", "pi", "custom"],
+      "default": "claude",
+      "description": "Coding agent runner to execute"
+    },
+    "customRunnerCommand": {
+      "type": "string",
+      "description": "Shell command template if runner is set to 'custom'"
+    },
+    "testCommand": {
+      "type": "string",
+      "default": "npm test",
+      "description": "Test command to run in the worktree before opening PR and merging"
+    },
+    "autoMerge": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether to automatically merge the Pull Request if tests pass"
+    },
+    "mergeMethod": {
+      "type": "string",
+      "enum": ["squash", "merge", "rebase"],
+      "default": "squash",
+      "description": "Git merge strategy for Pull Requests"
+    },
+    "cleanupWorktreeOnClose": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether to automatically delete the worktree and branch once the issue is merged and closed"
+    },
+    "quota": {
+      "type": "object",
+      "description": "5-hour rolling quota and rate limit settings",
+      "properties": {
+        "pauseOnLimit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically pause active workers when 5h quota is exceeded"
+        },
+        "utilizationThreshold": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 1.0,
+          "default": 0.95,
+          "description": "Proactive quota threshold trigger"
+        },
+        "proxyPort": {
+          "type": "integer",
+          "default": 9876,
+          "description": "Port for optional rate-limit interceptor proxy"
+        }
+      },
+      "additionalProperties": false
+    },
+    "labels": {
+      "type": "object",
+      "description": "Canonical triage label mappings",
+      "properties": {
+        "readyForAgent": {
+          "type": "string",
+          "default": "ready-for-agent",
+          "description": "Label indicating an issue is ready for autonomous agent execution"
+        },
+        "needsInfo": {
+          "type": "string",
+          "default": "needs-info",
+          "description": "Label indicating agent has paused and requested human feedback"
+        },
+        "readyForHuman": {
+          "type": "string",
+          "default": "ready-for-human",
+          "description": "Label indicating issue requires human review or manual intervention"
+        },
+        "needsTriage": {
+          "type": "string",
+          "default": "needs-triage",
+          "description": "Label for newly filed issues awaiting triage"
+        },
+        "wontfix": {
+          "type": "string",
+          "default": "wontfix",
+          "description": "Label for non-actionable issues"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

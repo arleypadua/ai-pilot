@@ -70,7 +70,7 @@ program
     try {
       const detectedRepo = options.repo || (await detectRepository());
       const config = {
-        $schema: 'https://raw.githubusercontent.com/owner/agent-autopilot/main/schema.json',
+        $schema: 'https://raw.githubusercontent.com/arleypadua/ai-pilot/main/schema.json',
         repository: detectedRepo || 'owner/repo',
         baseBranch: 'main',
         maxConcurrency: 2,
