@@ -39,7 +39,6 @@ export async function detectRepository(cwd: string = process.cwd()): Promise<str
   try {
     const { stdout } = await execa('git', ['remote', 'get-url', 'origin'], { cwd });
     const url = stdout.trim();
-    // Parse git@github.com:owner/repo.git or https://github.com/owner/repo.git
     const match = url.match(/github\.com[:/]([^/]+\/[^/.]+)(\.git)?$/);
     if (match && match[1]) {
       return match[1];
@@ -50,13 +49,24 @@ export async function detectRepository(cwd: string = process.cwd()): Promise<str
   return undefined;
 }
 
+export function getConfigPath(cwd: string = process.cwd()): string {
+  const dotAutopilotConfig = path.resolve(cwd, '.autopilot', 'config.json');
+  const legacyConfig = path.resolve(cwd, 'autopilot.config.json');
+
+  if (fs.existsSync(dotAutopilotConfig)) {
+    return dotAutopilotConfig;
+  }
+  if (fs.existsSync(legacyConfig)) {
+    return legacyConfig;
+  }
+  return dotAutopilotConfig; // Default destination
+}
+
 export async function loadConfig(
-  configPath?: string,
+  customPath?: string,
   cwd: string = process.cwd()
 ): Promise<AutoPilotConfig> {
-  const resolvedPath = configPath
-    ? path.resolve(cwd, configPath)
-    : path.resolve(cwd, 'autopilot.config.json');
+  const resolvedPath = customPath ? path.resolve(cwd, customPath) : getConfigPath(cwd);
 
   let fileConfig: Record<string, unknown> = {};
 
@@ -78,7 +88,33 @@ export async function loadConfig(
   return parsed;
 }
 
-export function saveConfig(config: Partial<AutoPilotConfig>, targetPath: string = 'autopilot.config.json'): void {
+export function saveConfig(
+  config: Partial<AutoPilotConfig>,
+  targetPath?: string,
+  cwd: string = process.cwd()
+): string {
+  const dest = targetPath ? path.resolve(cwd, targetPath) : path.resolve(cwd, '.autopilot', 'config.json');
+  const parentDir = path.dirname(dest);
+  if (!fs.existsSync(parentDir)) {
+    fs.mkdirSync(parentDir, { recursive: true });
+  }
+
   const serialized = JSON.stringify(config, null, 2);
-  fs.writeFileSync(targetPath, serialized, 'utf8');
+  fs.writeFileSync(dest, serialized, 'utf8');
+  ensureGitIgnoreRules(cwd);
+  return dest;
+}
+
+export function ensureGitIgnoreRules(cwd: string = process.cwd()): void {
+  const gitignorePath = path.resolve(cwd, '.gitignore');
+  const ruleBlock = `\n# Agent Auto-Pilot runtime state & worktrees\n.autopilot/*\n!.autopilot/config.json\n`;
+
+  if (fs.existsSync(gitignorePath)) {
+    const content = fs.readFileSync(gitignorePath, 'utf8');
+    if (!content.includes('.autopilot/*')) {
+      fs.appendFileSync(gitignorePath, ruleBlock, 'utf8');
+    }
+  } else {
+    fs.writeFileSync(gitignorePath, ruleBlock, 'utf8');
+  }
 }

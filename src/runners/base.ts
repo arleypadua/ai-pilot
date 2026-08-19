@@ -2,7 +2,9 @@ import type { RunnerResult, TaskContext } from '../types/index.js';
 
 export interface RunnerOptions {
   cwd: string;
+  issueNumber: number;
   onOutput?: (chunk: string) => void;
+  onStderr?: (chunk: string) => void;
   onPid?: (pid: number) => void;
 }
 

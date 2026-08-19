@@ -95,6 +95,7 @@ ${issue.body || 'No description provided.'}
       subprocess.stderr?.on('data', (chunk: Buffer) => {
         const text = chunk.toString();
         fullOutput += text;
+        if (options.onStderr) options.onStderr(text);
         if (options.onOutput) options.onOutput(text);
 
         if (this.quotaMonitor) {
@@ -127,7 +128,7 @@ ${issue.body || 'No description provided.'}
       return {
         success: true,
         status: 'COMPLETED',
-        summary: fullOutput.slice(-1000), // Last portion of output as summary
+        summary: fullOutput.slice(-1000),
       };
     } catch (err: any) {
       if (this.quotaMonitor) {

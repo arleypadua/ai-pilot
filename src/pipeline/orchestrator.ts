@@ -1,6 +1,4 @@
-import path from 'node:path';
-import fs from 'node:fs';
-import type { AutoPilotConfig, DAGNode, GitHubIssue } from '../types/index.js';
+import type { AutoPilotConfig, DAGNode } from '../types/index.js';
 import { GitHubClient } from '../github/client.js';
 import { IssueDAG } from '../github/dag.js';
 import { WorktreeManager } from '../worktree/manager.js';
@@ -9,6 +7,7 @@ import { RunnerRegistry } from '../runners/registry.js';
 import { Integrator } from './integrator.js';
 import { Notifier } from '../notifications/notifier.js';
 import { Dashboard } from '../ui/dashboard.js';
+import { StateManager } from '../state/manager.js';
 
 export class Orchestrator {
   private config: AutoPilotConfig;
@@ -19,6 +18,7 @@ export class Orchestrator {
   private runners: RunnerRegistry;
   private integrator: Integrator;
   private dashboard: Dashboard;
+  private stateMgr: StateManager;
 
   private isRunning: boolean = false;
   private pollTimer?: NodeJS.Timeout;
@@ -34,21 +34,25 @@ export class Orchestrator {
     this.runners = new RunnerRegistry(this.quotaMonitor);
     this.integrator = new Integrator(config, this.gh, this.worktreeMgr);
     this.dashboard = new Dashboard(config);
+    this.stateMgr = new StateManager();
 
     // Setup quota event listeners
     this.quotaMonitor.on('quota_paused', ({ resetAt, waitMs }) => {
       const waitMinutes = Math.ceil(waitMs / (60 * 1000));
+      this.stateMgr.updateDaemonStatus('paused_quota', resetAt.toISOString());
       Notifier.notifyQuotaPaused(resetAt, waitMinutes);
       this.dashboard.log(`5h Quota limit hit. Suspended workers until ${resetAt.toLocaleTimeString()}`);
     });
 
     this.quotaMonitor.on('quota_resumed', () => {
+      this.stateMgr.updateDaemonStatus('running');
       this.dashboard.log('Quota reset window reached. Resuming workers.');
     });
   }
 
   public async start(): Promise<void> {
     this.isRunning = true;
+    this.stateMgr.updateDaemonStatus('running');
     this.dashboard.log('Agent Auto-Pilot started.');
 
     // Check GitHub Auth
@@ -77,6 +81,7 @@ export class Orchestrator {
 
   public stop(): void {
     this.isRunning = false;
+    this.stateMgr.updateDaemonStatus('idle');
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
@@ -100,7 +105,6 @@ export class Orchestrator {
     // 4. Check for tasks needing feedback notification
     for (const node of this.dag.getWaitingFeedbackNodes()) {
       if (!this.lastKnownFeedbackQuestions.has(node.issue.number)) {
-        // Extract latest comment from issue if available
         const latestComment = node.issue.comments?.[node.issue.comments.length - 1]?.body;
         this.lastKnownFeedbackQuestions.set(node.issue.number, latestComment || 'Waiting for human input');
         Notifier.notifyTaskNeedsFeedback(node.issue.number, node.issue.title, latestComment);
@@ -112,7 +116,6 @@ export class Orchestrator {
     const readyNodes = this.dag.getReadyNodes();
 
     for (const node of readyNodes) {
-      // Clear from feedback map if previously parked
       if (this.lastKnownFeedbackQuestions.has(node.issue.number)) {
         this.lastKnownFeedbackQuestions.delete(node.issue.number);
       }
@@ -154,6 +157,16 @@ export class Orchestrator {
       worktreePath = wtInfo.worktreePath;
       branchName = wtInfo.branchName;
 
+      // Start Session in State Manager
+      this.stateMgr.startTaskSession({
+        issueNumber: issue.number,
+        title: issue.title,
+        url: issue.url,
+        branchName,
+        worktreePath,
+        runner: this.config.runner,
+      });
+
       this.dashboard.updateWorker({
         issueNumber: issue.number,
         title: issue.title,
@@ -162,14 +175,16 @@ export class Orchestrator {
         startedAt: new Date(),
       });
 
-      // 2. Check if there is user feedback on the issue (latest comment)
+      // 2. Check user feedback
       let userFeedback: string | undefined = undefined;
       if (isContinuation && issue.comments && issue.comments.length > 0) {
         userFeedback = issue.comments[issue.comments.length - 1].body;
       }
 
-      // 3. Run Agent with /implement skill
+      // 3. Run Agent
       const runner = this.runners.get(this.config.runner);
+      this.stateMgr.recordTaskStage(issue.number, 'AGENT_RUNNING', 'running', `Invoking ${this.config.runner} /implement`);
+
       const runnerRes = await runner.run(
         {
           issue,
@@ -182,14 +197,22 @@ export class Orchestrator {
         },
         {
           cwd: worktreePath,
+          issueNumber: issue.number,
           onOutput: (chunk) => {
-            // Stream output handler
+            this.stateMgr.appendTaskLog(issue.number, 'stdout', chunk);
+          },
+          onStderr: (chunk) => {
+            this.stateMgr.appendTaskLog(issue.number, 'stderr', chunk);
+          },
+          onPid: (pid) => {
+            this.stateMgr.recordTaskStage(issue.number, 'PID_ASSIGNED', 'running', `Process PID: ${pid}`);
           },
         }
       );
 
       // Check if runner paused due to quota
       if (runnerRes.status === 'QUOTA_PAUSED') {
+        this.stateMgr.recordTaskStage(issue.number, 'QUOTA_PAUSED', 'paused_quota', 'Paused due to 5h quota limits');
         this.dashboard.updateWorker({
           issueNumber: issue.number,
           title: issue.title,
@@ -208,12 +231,14 @@ export class Orchestrator {
       );
 
       if (hasFeedbackLabel || runnerRes.status === 'NEEDS_INFO') {
+        this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
         this.dashboard.log(`Issue #${issue.number} parked awaiting developer feedback.`);
         return;
       }
 
       // 4. If Completed, run Integration & Merge Pipeline
       if (runnerRes.success || runnerRes.status === 'COMPLETED') {
+        this.stateMgr.recordTaskStage(issue.number, 'INTEGRATING', 'testing', 'Running test suites & rebasing');
         this.dashboard.updateWorker({
           issueNumber: issue.number,
           title: issue.title,
@@ -232,10 +257,16 @@ export class Orchestrator {
         );
 
         if (integrationRes.success) {
+          this.stateMgr.finishTaskSession(issue.number, 'completed', {
+            prUrl: integrationRes.prUrl,
+            prNumber: integrationRes.prNumber,
+          });
           this.dashboard.log(`Successfully merged & closed Issue #${issue.number} (PR #${integrationRes.prNumber})`);
         } else {
+          this.stateMgr.finishTaskSession(issue.number, 'failed', {
+            error: integrationRes.error,
+          });
           this.dashboard.log(`Integration failed for Issue #${issue.number}: ${integrationRes.error}`);
-          // Add comment and flag ready-for-human
           await this.gh.addComment(
             issue.number,
             `⚠️ Agent Auto-Pilot finished implementation, but automated integration/tests failed:\n\`\`\`\n${integrationRes.error}\n\`\`\``
@@ -247,6 +278,7 @@ export class Orchestrator {
         }
       }
     } catch (err: any) {
+      this.stateMgr.finishTaskSession(issue.number, 'failed', { error: err.message });
       this.dashboard.log(`Task #${issue.number} failed: ${err.message}`);
       try {
         await this.gh.addComment(
