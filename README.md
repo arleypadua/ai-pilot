@@ -2,13 +2,15 @@
 
 Autonomous, multi-task GitHub issue orchestrator powered by Claude CLI, git worktrees, DAG scheduling, and subscription rolling quota management.
 
+Designed to autonomously execute "grilled work" (issues tagged `ready-for-agent` after being refined and grilled for specification clarity) based on the agentic workflow proposed by Matt Pocock on [mattpocock/skills](https://github.com/mattpocock/skills).
+
 ---
 
 ## Key Features
 
+- 🎯 **Grilled Work Execution (`ready-for-agent`)**: Picks up thoroughly grilled and specified issues, invoking the `/implement` skill directly with full context.
 - 🌳 **Dependency-Aware DAG Scheduler**: Automatically parses parent/child relations (`Specs`, `Tickets`, `Standalone`), task checklists (`- [ ] #123`), and blockers (`Blocked by #45`).
 - ⚡ **Parallel Git Worktrees**: Spawns isolated `.autopilot/worktrees/issue-<number>` environments up to your configured concurrency limit.
-- 🎯 **Strict `/implement` Skill Invocation**: Dispatches agents strictly through the `/implement` skill prompt with full acceptance criteria and issue context.
 - ⏳ **5-Hour Rolling Quota Protection**: Intercepts Claude Code rate-limit patterns in real time, automatically suspends worker processes (`SIGSTOP`), and resumes them once the rolling window opens up.
 - 💬 **Human Feedback Loop & Session Continuation**: Preserves worktree state when an agent needs information (`needs-info`), fires desktop notifications, and smoothly resumes with developer feedback once answered on GitHub.
 - 🔀 **Auto-Rebase, PR & Auto-Merge**: Automatically syncs against latest `main`, opens Pull Requests, auto-merges, and cleanly tears down worktrees on completion.
@@ -84,5 +86,7 @@ agent-autopilot clean
 ---
 
 ## Canonical Triage Workflow
+
+Based on the [mattpocock/skills](https://github.com/mattpocock/skills) workflow, issues undergo thorough specification and grilling before being marked with `ready-for-agent`. Once labeled, Agent Auto-Pilot picks them up for execution.
 
 See [docs/agents/triage-labels.md](file:///Users/arleypadua/repos/agent-auto-pilot/docs/agents/triage-labels.md) for full details on labels and dependency syntax.
