@@ -5,8 +5,22 @@ export class IssueDAG {
   private nodes: Map<number, DAGNode> = new Map();
   private config: AutoPilotConfig;
 
-  constructor(config: AutoPilotConfig) {
-    this.config = config;
+  constructor(config: Partial<AutoPilotConfig> = {}) {
+    this.config = {
+      baseBranch: 'main',
+      runner: 'claude',
+      pollIntervalSeconds: 10,
+      maxConcurrency: 2,
+      ...config,
+      labels: {
+        readyForAgent: 'ready-for-agent',
+        needsInfo: 'needs-info',
+        readyForHuman: 'ready-for-human',
+        needsTriage: 'needs-triage',
+        wontfix: 'wontfix',
+        ...(config.labels || {}),
+      },
+    } as AutoPilotConfig;
   }
 
   public build(issues: GitHubIssue[]): void {
