@@ -285,16 +285,16 @@ export class Orchestrator {
 
       // 4. If Completed, run Integration & Merge Pipeline
       if (runnerRes.success || runnerRes.status === 'COMPLETED') {
-        this.stateMgr.recordTaskStage(issue.number, 'INTEGRATING', 'testing', 'Running test suites & rebasing');
+        this.stateMgr.recordTaskStage(issue.number, 'INTEGRATING', 'merging', 'Rebasing on main & creating PR');
         this.dashboard.updateWorker({
           issueNumber: issue.number,
           title: issue.title,
           branchName,
-          status: 'testing',
+          status: 'merging',
           startedAt: new Date(),
         });
 
-        this.dashboard.log(`Running tests & merging Issue #${issue.number}...`);
+        this.dashboard.log(`Rebasing, opening PR & merging Issue #${issue.number}...`);
 
         const integrationRes = await this.integrator.integrateAndMerge(
           issue,

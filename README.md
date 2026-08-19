@@ -11,7 +11,7 @@ Autonomous, multi-task GitHub issue orchestrator powered by Claude CLI, git work
 - 🎯 **Strict `/implement` Skill Invocation**: Dispatches agents strictly through the `/implement` skill prompt with full acceptance criteria and issue context.
 - ⏳ **5-Hour Rolling Quota Protection**: Intercepts Claude Code rate-limit patterns in real time, automatically suspends worker processes (`SIGSTOP`), and resumes them once the rolling window opens up.
 - 💬 **Human Feedback Loop & Session Continuation**: Preserves worktree state when an agent needs information (`needs-info`), fires desktop notifications, and smoothly resumes with developer feedback once answered on GitHub.
-- 🔀 **Auto-Rebase, Testing, PR & Auto-Merge**: Automatically syncs against latest `main`, runs test suites, opens Pull Requests, auto-merges, and cleanly tears down worktrees on completion.
+- 🔀 **Auto-Rebase, PR & Auto-Merge**: Automatically syncs against latest `main`, opens Pull Requests, auto-merges, and cleanly tears down worktrees on completion.
 
 ---
 
@@ -49,7 +49,6 @@ This generates `autopilot.config.json`:
   "maxConcurrency": 2,
   "pollIntervalSeconds": 30,
   "runner": "claude",
-  "testCommand": "npm test",
   "autoMerge": true,
   "mergeMethod": "squash",
   "cleanupWorktreeOnClose": true,

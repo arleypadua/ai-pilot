@@ -141,48 +141,6 @@ export class WorktreeManager {
     }
   }
 
-  public async runTests(
-    worktreePath: string,
-    testCommand: string
-  ): Promise<{ success: boolean; output: string }> {
-    const trimmed = testCommand?.trim();
-    if (!trimmed || trimmed === 'none' || trimmed === 'skip') {
-      return { success: true, output: 'Tests skipped by configuration.' };
-    }
-
-    let effectiveCommand = trimmed;
-
-    // If default "npm test" is set, verify root project type
-    if (effectiveCommand === 'npm test') {
-      const hasPackageJson = fs.existsSync(path.join(worktreePath, 'package.json'));
-      const hasCargoToml = fs.existsSync(path.join(worktreePath, 'Cargo.toml'));
-      const hasPnpmWorkspace = fs.existsSync(path.join(worktreePath, 'pnpm-workspace.yaml'));
-
-      if (!hasPackageJson) {
-        if (hasCargoToml) {
-          effectiveCommand = 'cargo test';
-        } else if (hasPnpmWorkspace) {
-          effectiveCommand = 'pnpm test';
-        } else {
-          return {
-            success: true,
-            output: 'No root package.json or Cargo.toml detected in worktree. Skipping default npm test.',
-          };
-        }
-      }
-    }
-
-    try {
-      const { stdout, stderr } = await execa({
-        cwd: worktreePath,
-        shell: true,
-      })`${effectiveCommand}`;
-      return { success: true, output: `${stdout}\n${stderr}` };
-    } catch (err: any) {
-      return { success: false, output: `${err.stdout || ''}\n${err.stderr || ''}\n${err.message}` };
-    }
-  }
-
   public async commitAll(worktreePath: string, message: string): Promise<boolean> {
     try {
       await execa('git', ['add', '-A'], { cwd: worktreePath });

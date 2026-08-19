@@ -91,7 +91,6 @@ export interface AutoPilotConfig {
   pollIntervalSeconds: number;
   runner: 'claude' | 'agy' | 'pi' | 'custom';
   customRunnerCommand?: string;
-  testCommand?: string;
   autoMerge: boolean;
   mergeMethod: 'squash' | 'merge' | 'rebase';
   cleanupWorktreeOnClose: boolean;

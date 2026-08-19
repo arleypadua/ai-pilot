@@ -39,11 +39,6 @@
       "type": "string",
       "description": "Shell command template if runner is set to 'custom'"
     },
-    "testCommand": {
-      "type": "string",
-      "default": "npm test",
-      "description": "Test command to run in the worktree before opening PR and merging"
-    },
     "autoMerge": {
       "type": "boolean",
       "default": true,
