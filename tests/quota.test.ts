@@ -19,6 +19,14 @@ describe('QuotaMonitor', () => {
     expect(diffMinutes).toBeCloseTo(45, -1);
   });
 
+  it('should detect Claude Code "hit your session limit · resets 5pm (Europe/Amsterdam)"', () => {
+    const monitor = new QuotaMonitor();
+    const result = monitor.checkOutputForRateLimit("You've hit your session limit · resets 5pm (Europe/Amsterdam)");
+    expect(result.isRateLimited).toBe(true);
+    expect(result.resetAt).toBeDefined();
+    expect(result.resetAt!.getHours()).toBe(17);
+  });
+
   it('should return false for normal output', () => {
     const monitor = new QuotaMonitor();
     const result = monitor.checkOutputForRateLimit('Successfully executed test suite: 12 tests passed.');

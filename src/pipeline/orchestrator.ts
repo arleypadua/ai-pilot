@@ -209,10 +209,20 @@ export class Orchestrator {
         // Comment failure is non-fatal
       }
 
-      // 3. Check user feedback for continuation
+      // 3. Check user feedback for continuation (filtering out autopilot bot comments)
       let userFeedback: string | undefined = undefined;
       if (isContinuation && issue.comments && issue.comments.length > 0) {
-        userFeedback = issue.comments[issue.comments.length - 1].body;
+        const humanComments = issue.comments.filter(
+          (c) =>
+            !c.body.startsWith('🤖 **Agent Auto-Pilot') &&
+            !c.body.startsWith('🔄 **Agent Auto-Pilot') &&
+            !c.body.startsWith('🎉 **Spec Complete') &&
+            !c.body.startsWith('⚠️ Agent Auto-Pilot') &&
+            !c.body.startsWith('❌ Agent Auto-Pilot')
+        );
+        if (humanComments.length > 0) {
+          userFeedback = humanComments[humanComments.length - 1].body;
+        }
       }
 
       // 4. Run Agent (/implement)

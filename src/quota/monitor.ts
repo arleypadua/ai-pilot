@@ -32,13 +32,17 @@ export class QuotaMonitor extends EventEmitter {
     const lower = text.toLowerCase();
 
     const rateLimitPatterns = [
+      'session limit',
+      'hit your session limit',
       'usage limit reached',
       'rate limit reached',
       '429 too many requests',
+      '5-hour limit',
       'hit your 5-hour limit',
       'hit your usage limit',
       'rate_limit_error',
       'exhausted your quota',
+      'overloaded_error',
     ];
 
     const matched = rateLimitPatterns.some((pattern) => lower.includes(pattern));
@@ -48,7 +52,7 @@ export class QuotaMonitor extends EventEmitter {
 
     let resetAt: Date | undefined = undefined;
 
-    // Try parsing "resets in X hours Y minutes"
+    // 1. Try parsing "resets in X hours Y minutes" (e.g. "resets in 2 hours 30 minutes", "resets in 4h")
     const inHoursMatch = lower.match(/resets?\s+(?:in|after)\s+(\d+)\s*h(?:ours?)?(?:\s*(\d+)\s*m(?:inutes?)?)?/i);
     if (inHoursMatch) {
       const hours = parseInt(inHoursMatch[1], 10);
@@ -57,7 +61,7 @@ export class QuotaMonitor extends EventEmitter {
       resetAt = new Date(Date.now() + ms);
     }
 
-    // Try parsing "resets in X minutes"
+    // 2. Try parsing "resets in X minutes"
     if (!resetAt) {
       const inMinsMatch = lower.match(/resets?\s+(?:in|after)\s+(\d+)\s*m(?:inutes?)?/i);
       if (inMinsMatch) {
@@ -66,13 +70,13 @@ export class QuotaMonitor extends EventEmitter {
       }
     }
 
-    // Try parsing "reset at HH:MM" or "resets at HH:MM AM/PM"
+    // 3. Try parsing "resets 5pm", "resets at 5pm", "resets 5:00pm", "resets 17:00", "resets at 17:00"
     if (!resetAt) {
-      const atTimeMatch = text.match(/resets?\s+at\s+(\d{1,2}):(\d{2})(?:\s*(am|pm))?/i);
-      if (atTimeMatch) {
-        let hour = parseInt(atTimeMatch[1], 10);
-        const minute = parseInt(atTimeMatch[2], 10);
-        const ampm = atTimeMatch[3]?.toLowerCase();
+      const timeMatch = text.match(/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+      if (timeMatch) {
+        let hour = parseInt(timeMatch[1], 10);
+        const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+        const ampm = timeMatch[3]?.toLowerCase();
 
         if (ampm === 'pm' && hour < 12) hour += 12;
         if (ampm === 'am' && hour === 12) hour = 0;
@@ -80,7 +84,7 @@ export class QuotaMonitor extends EventEmitter {
         const target = new Date();
         target.setHours(hour, minute, 0, 0);
         if (target.getTime() <= Date.now()) {
-          // Time is tomorrow
+          // If the computed time is earlier today, it means tomorrow
           target.setDate(target.getDate() + 1);
         }
         resetAt = target;
