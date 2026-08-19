@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { TaskStatus } from '../types/index.js';
 
 export interface TaskSessionMetadata {
+  sessionId: string;
   issueNumber: number;
   title: string;
   url?: string;
@@ -111,12 +112,15 @@ export class StateManager {
     worktreePath: string;
     runner: string;
     pid?: number;
+    sessionId?: string;
   }): TaskSessionMetadata {
     const sessionDir = this.getSessionDir(metadata.issueNumber);
     const now = new Date().toISOString();
+    const sessionId = metadata.sessionId || `session-issue-${metadata.issueNumber}-${Date.now().toString(36)}`;
 
     const session: TaskSessionMetadata = {
       ...metadata,
+      sessionId,
       status: 'running',
       startedAt: now,
       updatedAt: now,

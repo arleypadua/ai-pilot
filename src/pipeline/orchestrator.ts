@@ -194,7 +194,7 @@ export class Orchestrator {
       branchName = wtInfo.branchName;
 
       // Start Session in State Manager
-      this.stateMgr.startTaskSession({
+      const session = this.stateMgr.startTaskSession({
         issueNumber: issue.number,
         title: issue.title,
         url: issue.url,
@@ -213,8 +213,8 @@ export class Orchestrator {
 
       // 2. Post Start/Resume Comment to GitHub Issue
       const startComment = isContinuation
-        ? `🔄 **Agent Auto-Pilot resumed work**\n\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Resumed At**: \`${new Date().toUTCString()}\`\n\n*Continuing implementation with latest feedback from comments.*`
-        : `🤖 **Agent Auto-Pilot started implementation**\n\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${this.config.baseBranch}\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*I will execute tests locally, rebase against \`${this.config.baseBranch}\`, and open a Pull Request upon completion.*`;
+        ? `🔄 **Agent Auto-Pilot resumed work**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Resumed At**: \`${new Date().toUTCString()}\`\n\n*Continuing implementation with latest feedback from comments.*`
+        : `🤖 **Agent Auto-Pilot started implementation**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${this.config.baseBranch}\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*I will execute tests locally, rebase against \`${this.config.baseBranch}\`, and open a Pull Request upon completion.*`;
 
       try {
         await this.gh.addComment(issue.number, startComment);
