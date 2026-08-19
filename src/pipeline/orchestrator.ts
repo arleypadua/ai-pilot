@@ -96,7 +96,8 @@ export class Orchestrator {
     this.dag.build(issues);
 
     // 2. Refresh UI Dashboard
-    this.dashboard.render(this.dag, this.quotaMonitor.getStatus());
+    const activeWorktrees = await this.worktreeMgr.listActiveWorktrees();
+    this.dashboard.render(this.dag, this.quotaMonitor.getStatus(), activeWorktrees);
 
     // 3. If Quota is paused, do not dispatch new tasks
     if (this.quotaMonitor.getStatus().isPaused) {

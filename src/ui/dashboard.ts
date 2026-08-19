@@ -1,6 +1,7 @@
 import Table from 'cli-table3';
 import pc from 'picocolors';
 import type { AutoPilotConfig, TaskStatus } from '../types/index.js';
+import type { WorktreeInfo } from '../worktree/manager.js';
 import type { QuotaStatus } from '../quota/monitor.js';
 import type { IssueDAG } from '../github/dag.js';
 
@@ -23,14 +24,18 @@ export class Dashboard {
   }
 
   public log(message: string): void {
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const time = new Date().toLocaleTimeString();
     this.logs.push(`[${time}] ${message}`);
-    if (this.logs.length > 8) {
+    if (this.logs.length > 50) {
       this.logs.shift();
     }
   }
 
   public updateWorker(worker: ActiveWorker): void {
+    this.activeWorkers.set(worker.issueNumber, worker);
+  }
+
+  public upsertWorker(worker: ActiveWorker): void {
     this.activeWorkers.set(worker.issueNumber, worker);
   }
 
@@ -45,18 +50,17 @@ export class Dashboard {
     return `${m}m ${s}s`;
   }
 
-  public render(dag: IssueDAG, quotaStatus: QuotaStatus): void {
+  public render(dag: IssueDAG, quotaStatus: QuotaStatus, existingWorktrees: WorktreeInfo[] = []): void {
     // Clear screen
-    process.stdout.write('\x1Bc');
+    console.clear();
 
+    const specContext = this.config.targetSpec ? ` | Scoped Spec: #${this.config.targetSpec}` : '';
+    const repoContext = this.config.repository ? ` | Repo: ${this.config.repository}` : '';
+
+    // Header Banner
     console.log(
-      pc.bold(pc.cyan('⚡ AGENT AUTO-PILOT')) +
-        pc.gray(' | ') +
-        pc.bold(`Repo: ${this.config.repository || 'Local'}`) +
-        (this.config.targetSpec ? pc.magenta(` | Scoped Spec: #${this.config.targetSpec}`) : '') +
-        pc.gray(' | ') +
-        pc.green(`Runner: ${this.config.runner} (/implement)`) +
-        pc.gray(' | ') +
+      pc.bold(pc.bgCyan(pc.black(' ⚡ AGENT AUTO-PILOT '))) +
+        pc.cyan(repoContext + specContext + ` | Runner: ${this.config.runner} (/implement) | `) +
         `Concurrency: ${this.activeWorkers.size}/${this.config.maxConcurrency}`
     );
 
@@ -119,7 +123,7 @@ export class Dashboard {
     }
     console.log('');
 
-    // 1. Active Workers Table
+    // 1. Active & WIP Worktrees Table
     const workerTable = new Table({
       head: [
         pc.cyan('Issue'),
@@ -128,32 +132,58 @@ export class Dashboard {
         pc.cyan('Status'),
         pc.cyan('Elapsed'),
       ],
-      colWidths: [10, 32, 28, 16, 12],
+      colWidths: [10, 32, 28, 18, 14],
     });
 
-    if (this.activeWorkers.size === 0) {
-      workerTable.push([
-        { colSpan: 5, content: pc.gray('No active agent workers running (Idle)') },
-      ]);
-    } else {
-      for (const worker of this.activeWorkers.values()) {
-        let statusStr: string = worker.status;
-        if (worker.status === 'running') statusStr = pc.blue('⚡ running');
-        else if (worker.status === 'testing') statusStr = pc.magenta('🧪 testing');
-        else if (worker.status === 'merging') statusStr = pc.yellow('🔀 merging');
-        else if (worker.status === 'paused_quota') statusStr = pc.red('⏳ paused');
+    const renderedIssueNumbers = new Set<number>();
 
-        workerTable.push([
-          `#${worker.issueNumber}`,
-          worker.title.slice(0, 30),
-          worker.branchName.slice(0, 26),
-          statusStr,
-          this.formatDuration(worker.startedAt),
-        ]);
+    // Add in-memory actively executing workers
+    for (const worker of this.activeWorkers.values()) {
+      renderedIssueNumbers.add(worker.issueNumber);
+      let statusStr: string = worker.status;
+      if (worker.status === 'running') statusStr = pc.blue('⚡ running');
+      else if (worker.status === 'testing') statusStr = pc.magenta('🧪 testing');
+      else if (worker.status === 'merging') statusStr = pc.yellow('🔀 merging');
+      else if (worker.status === 'paused_quota') statusStr = pc.red('⏳ paused');
+
+      workerTable.push([
+        `#${worker.issueNumber}`,
+        worker.title.slice(0, 30),
+        worker.branchName.slice(0, 26),
+        statusStr,
+        this.formatDuration(worker.startedAt),
+      ]);
+    }
+
+    // Add WIP / Paused worktrees on disk waiting to resume
+    for (const wt of existingWorktrees) {
+      if (wt.issueNumber && !renderedIssueNumbers.has(wt.issueNumber)) {
+        const node = dag.getNode(wt.issueNumber);
+        if (node && node.issue.state === 'OPEN') {
+          renderedIssueNumbers.add(wt.issueNumber);
+          const isPaused = quotaStatus.isPaused || quotaStatus.rollingStats?.isApproachingLimit;
+          const statusStr = isPaused
+            ? pc.yellow('⏳ paused (quota)')
+            : pc.cyan('⏳ waiting (WIP)');
+
+          workerTable.push([
+            `#${wt.issueNumber}`,
+            node.issue.title.slice(0, 30),
+            wt.branch.slice(0, 26),
+            statusStr,
+            pc.gray('preserves WIP'),
+          ]);
+        }
       }
     }
 
-    console.log(pc.bold('Active Agent Worktrees:'));
+    if (renderedIssueNumbers.size === 0) {
+      workerTable.push([
+        { colSpan: 5, content: pc.gray('No active agent workers running (Idle)') },
+      ]);
+    }
+
+    console.log(pc.bold('Active & Paused Agent Worktrees:'));
     console.log(workerTable.toString());
     console.log('');
 
