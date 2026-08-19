@@ -6,6 +6,7 @@
   "properties": {
     "repository": {
       "type": "string",
+      "pattern": "^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$",
       "description": "Target GitHub repository in 'owner/repo' format (e.g. 'arleypadua/imagos')"
     },
     "targetSpec": {
@@ -52,6 +53,28 @@
     "customRunnerCommand": {
       "type": "string",
       "description": "Shell command template if runner is set to 'custom'"
+    },
+    "runnerConfig": {
+      "type": "object",
+      "description": "Optional runner-specific configurations (e.g. model, effort)",
+      "properties": {
+        "agy": {
+          "type": "object",
+          "description": "Antigravity CLI runner configuration",
+          "properties": {
+            "model": {
+              "type": "string",
+              "description": "Model selection for Antigravity runner"
+            },
+            "effort": {
+              "type": "string",
+              "description": "Effort / reasoning intensity level"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
     },
     "autoMerge": {
       "type": "boolean",

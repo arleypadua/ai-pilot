@@ -4,8 +4,22 @@ import path from 'node:path';
 import { execa } from 'execa';
 import type { AutoPilotConfig } from '../types/index.js';
 
+export const AgyRunnerConfigSchema = z.object({
+  model: z.string().optional(),
+  effort: z.string().optional(),
+});
+
+export const RunnerConfigSchema = z
+  .object({
+    agy: AgyRunnerConfigSchema.optional(),
+  })
+  .passthrough();
+
 export const AutoPilotConfigSchema = z.object({
-  repository: z.string().optional(),
+  repository: z
+    .string()
+    .regex(/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/, 'Repository must be in "owner/repo" format')
+    .optional(),
   targetSpec: z.union([z.number().int(), z.array(z.number().int())]).optional(),
   targetSpecs: z.array(z.number().int()).optional(),
   baseBranch: z.string().default('main'),
@@ -14,6 +28,7 @@ export const AutoPilotConfigSchema = z.object({
   extraPrompt: z.string().optional(),
   runner: z.enum(['claude', 'agy', 'pi', 'custom']).default('claude'),
   customRunnerCommand: z.string().optional(),
+  runnerConfig: RunnerConfigSchema.optional(),
   autoMerge: z.boolean().default(true),
   mergeMethod: z.enum(['squash', 'merge', 'rebase']).default('squash'),
   cleanupWorktreeOnClose: z.boolean().default(true),

@@ -85,6 +85,17 @@ export interface RunnerResult {
   injectedPrompt?: string;
 }
 
+export interface AgyRunnerConfig {
+  model?: string;
+  effort?: string;
+}
+
+export interface RunnerConfig {
+  agy?: AgyRunnerConfig;
+  claude?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface AutoPilotConfig {
   repository?: string;
   targetSpec?: number | number[];
@@ -95,6 +106,7 @@ export interface AutoPilotConfig {
   extraPrompt?: string;
   runner: 'claude' | 'agy' | 'pi' | 'custom';
   customRunnerCommand?: string;
+  runnerConfig?: RunnerConfig;
   autoMerge: boolean;
   mergeMethod: 'squash' | 'merge' | 'rebase';
   cleanupWorktreeOnClose: boolean;

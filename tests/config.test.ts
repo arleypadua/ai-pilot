@@ -1,0 +1,482 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { ZodError } from 'zod';
+import {
+  AutoPilotConfigSchema,
+  RunnerConfigSchema,
+  AgyRunnerConfigSchema,
+  DEFAULT_CONFIG,
+  parseSpecsOption,
+  loadConfig,
+  saveConfig,
+  getConfigPath,
+  detectRepository,
+  ensureGitIgnoreRules,
+} from '../src/config/schema.js';
+
+describe('AutoPilotConfigSchema', () => {
+  describe('default values', () => {
+    it('accepts empty object and applies all default values', () => {
+      const config = AutoPilotConfigSchema.parse({});
+
+      expect(config.baseBranch).toBe('main');
+      expect(config.maxConcurrency).toBe(2);
+      expect(config.pollIntervalSeconds).toBe(30);
+      expect(config.runner).toBe('claude');
+      expect(config.autoMerge).toBe(true);
+      expect(config.mergeMethod).toBe('squash');
+      expect(config.cleanupWorktreeOnClose).toBe(true);
+      expect(config.repository).toBeUndefined();
+      expect(config.extraPrompt).toBeUndefined();
+      expect(config.runnerConfig).toBeUndefined();
+
+      expect(config.quota).toEqual({
+        pauseOnLimit: true,
+        utilizationThreshold: 0.85,
+        proxyPort: 9876,
+      });
+
+      expect(config.labels).toEqual({
+        readyForAgent: 'ready-for-agent',
+        needsInfo: 'needs-info',
+        readyForHuman: 'ready-for-human',
+        needsTriage: 'needs-triage',
+        wontfix: 'wontfix',
+      });
+    });
+
+    it('matches DEFAULT_CONFIG constant', () => {
+      const parsed = AutoPilotConfigSchema.parse({});
+      expect(DEFAULT_CONFIG).toEqual(parsed);
+    });
+  });
+
+  describe('valid configurations', () => {
+    it('accepts valid custom configuration overriding defaults', () => {
+      const custom = {
+        repository: 'owner/custom-repo',
+        targetSpec: 42,
+        baseBranch: 'develop',
+        maxConcurrency: 4,
+        pollIntervalSeconds: 15,
+        extraPrompt: 'Run build before test',
+        runner: 'agy' as const,
+        customRunnerCommand: 'custom-runner --flags',
+        autoMerge: false,
+        mergeMethod: 'rebase' as const,
+        cleanupWorktreeOnClose: false,
+        quota: {
+          pauseOnLimit: false,
+          utilizationThreshold: 0.9,
+          tokenCeiling: 25000,
+          proxyPort: 8080,
+        },
+        labels: {
+          readyForAgent: 'agent:ready',
+          needsInfo: 'agent:blocked',
+          readyForHuman: 'human:review',
+          needsTriage: 'triage:needed',
+          wontfix: 'abandoned',
+        },
+      };
+
+      const result = AutoPilotConfigSchema.parse(custom);
+      expect(result.repository).toBe('owner/custom-repo');
+      expect(result.targetSpec).toBe(42);
+      expect(result.baseBranch).toBe('develop');
+      expect(result.maxConcurrency).toBe(4);
+      expect(result.pollIntervalSeconds).toBe(15);
+      expect(result.extraPrompt).toBe('Run build before test');
+      expect(result.runner).toBe('agy');
+      expect(result.customRunnerCommand).toBe('custom-runner --flags');
+      expect(result.autoMerge).toBe(false);
+      expect(result.mergeMethod).toBe('rebase');
+      expect(result.cleanupWorktreeOnClose).toBe(false);
+      expect(result.quota).toEqual({
+        pauseOnLimit: false,
+        utilizationThreshold: 0.9,
+        tokenCeiling: 25000,
+        proxyPort: 8080,
+      });
+      expect(result.labels).toEqual(custom.labels);
+    });
+
+    it('accepts targetSpec as array of integers and targetSpecs', () => {
+      const config1 = AutoPilotConfigSchema.parse({ targetSpec: [10, 20, 30] });
+      expect(config1.targetSpec).toEqual([10, 20, 30]);
+
+      const config2 = AutoPilotConfigSchema.parse({ targetSpecs: [100, 200] });
+      expect(config2.targetSpecs).toEqual([100, 200]);
+    });
+
+    it('accepts valid runner choices: claude, agy, pi, custom', () => {
+      for (const runner of ['claude', 'agy', 'pi', 'custom'] as const) {
+        const config = AutoPilotConfigSchema.parse({ runner });
+        expect(config.runner).toBe(runner);
+      }
+    });
+
+    it('accepts valid mergeMethod choices: squash, merge, rebase', () => {
+      for (const mergeMethod of ['squash', 'merge', 'rebase'] as const) {
+        const config = AutoPilotConfigSchema.parse({ mergeMethod });
+        expect(config.mergeMethod).toBe(mergeMethod);
+      }
+    });
+  });
+
+  describe('runnerConfig and agy settings', () => {
+    it('parses optional agy runner settings (model and effort)', () => {
+      const config = AutoPilotConfigSchema.parse({
+        runner: 'agy',
+        runnerConfig: {
+          agy: {
+            model: 'gemini-3.7-flash',
+            effort: 'high',
+          },
+        },
+      });
+
+      expect(config.runnerConfig).toBeDefined();
+      expect(config.runnerConfig?.agy?.model).toBe('gemini-3.7-flash');
+      expect(config.runnerConfig?.agy?.effort).toBe('high');
+    });
+
+    it('parses runnerConfig with only model specified', () => {
+      const config = AutoPilotConfigSchema.parse({
+        runnerConfig: {
+          agy: {
+            model: 'claude-3-7-sonnet',
+          },
+        },
+      });
+
+      expect(config.runnerConfig?.agy?.model).toBe('claude-3-7-sonnet');
+      expect(config.runnerConfig?.agy?.effort).toBeUndefined();
+    });
+
+    it('parses runnerConfig with only effort specified', () => {
+      const config = AutoPilotConfigSchema.parse({
+        runnerConfig: {
+          agy: {
+            effort: 'max',
+          },
+        },
+      });
+
+      expect(config.runnerConfig?.agy?.model).toBeUndefined();
+      expect(config.runnerConfig?.agy?.effort).toBe('max');
+    });
+
+    it('allows empty runnerConfig object', () => {
+      const config = AutoPilotConfigSchema.parse({
+        runnerConfig: {},
+      });
+
+      expect(config.runnerConfig).toEqual({});
+    });
+
+    it('allows passthrough properties for additional runner configs', () => {
+      const config = AutoPilotConfigSchema.parse({
+        runnerConfig: {
+          agy: {
+            model: 'gemini-2.5-pro',
+          },
+          claude: {
+            thinkingBudget: 4096,
+          },
+          custom: {
+            timeout: 60000,
+          },
+        },
+      });
+
+      expect(config.runnerConfig?.agy?.model).toBe('gemini-2.5-pro');
+      expect(config.runnerConfig?.claude).toEqual({ thinkingBudget: 4096 });
+      expect(config.runnerConfig?.custom).toEqual({ timeout: 60000 });
+    });
+
+    it('AgyRunnerConfigSchema parses standalone agy config', () => {
+      const agyConfig = AgyRunnerConfigSchema.parse({
+        model: 'gemini-3.7-pro',
+        effort: 'medium',
+      });
+      expect(agyConfig.model).toBe('gemini-3.7-pro');
+      expect(agyConfig.effort).toBe('medium');
+    });
+
+    it('RunnerConfigSchema parses standalone runnerConfig', () => {
+      const parsed = RunnerConfigSchema.parse({
+        agy: {
+          model: 'gemini-3.7-flash',
+          effort: 'low',
+        },
+      });
+      expect(parsed?.agy?.model).toBe('gemini-3.7-flash');
+      expect(parsed?.agy?.effort).toBe('low');
+    });
+  });
+
+  describe('repository format validation', () => {
+    it('accepts valid repository in owner/repo format', () => {
+      const validRepos = [
+        'arleypadua/imagos',
+        'facebook/react',
+        'owner-name/repo-name',
+        'org_name/repo.name',
+        'user.name/repo_v2',
+        '123owner/456repo',
+      ];
+
+      for (const repo of validRepos) {
+        const config = AutoPilotConfigSchema.parse({ repository: repo });
+        expect(config.repository).toBe(repo);
+      }
+    });
+
+    it('accepts omitted or undefined repository', () => {
+      const config1 = AutoPilotConfigSchema.parse({});
+      expect(config1.repository).toBeUndefined();
+
+      const config2 = AutoPilotConfigSchema.parse({ repository: undefined });
+      expect(config2.repository).toBeUndefined();
+    });
+
+    it('rejects invalid repository format without slash', () => {
+      expect(() => AutoPilotConfigSchema.parse({ repository: 'invalid-repo' })).toThrow(ZodError);
+
+      try {
+        AutoPilotConfigSchema.parse({ repository: 'invalid-repo' });
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(ZodError);
+        expect(err.errors[0].message).toContain('owner/repo');
+      }
+    });
+
+    it('rejects repository with multiple slashes', () => {
+      expect(() => AutoPilotConfigSchema.parse({ repository: 'owner/repo/extra' })).toThrow(ZodError);
+    });
+
+    it('rejects empty string as repository', () => {
+      expect(() => AutoPilotConfigSchema.parse({ repository: '' })).toThrow(ZodError);
+    });
+
+    it('rejects repository with leading or trailing slash', () => {
+      expect(() => AutoPilotConfigSchema.parse({ repository: '/repo' })).toThrow(ZodError);
+      expect(() => AutoPilotConfigSchema.parse({ repository: 'owner/' })).toThrow(ZodError);
+    });
+
+    it('rejects repository with spaces or whitespace', () => {
+      expect(() => AutoPilotConfigSchema.parse({ repository: 'owner / repo' })).toThrow(ZodError);
+      expect(() => AutoPilotConfigSchema.parse({ repository: ' owner/repo' })).toThrow(ZodError);
+      expect(() => AutoPilotConfigSchema.parse({ repository: 'owner/repo ' })).toThrow(ZodError);
+    });
+
+    it('rejects non-string repository types', () => {
+      expect(() => AutoPilotConfigSchema.parse({ repository: 12345 })).toThrow(ZodError);
+      expect(() => AutoPilotConfigSchema.parse({ repository: true })).toThrow(ZodError);
+      expect(() => AutoPilotConfigSchema.parse({ repository: {} })).toThrow(ZodError);
+    });
+  });
+
+  describe('schema validation constraints', () => {
+    it('rejects maxConcurrency less than 1', () => {
+      expect(() => AutoPilotConfigSchema.parse({ maxConcurrency: 0 })).toThrow(ZodError);
+      expect(() => AutoPilotConfigSchema.parse({ maxConcurrency: -1 })).toThrow(ZodError);
+    });
+
+    it('rejects pollIntervalSeconds less than 5', () => {
+      expect(() => AutoPilotConfigSchema.parse({ pollIntervalSeconds: 4 })).toThrow(ZodError);
+      expect(() => AutoPilotConfigSchema.parse({ pollIntervalSeconds: 0 })).toThrow(ZodError);
+    });
+
+    it('rejects invalid runner value', () => {
+      expect(() => AutoPilotConfigSchema.parse({ runner: 'unsupported-runner' })).toThrow(ZodError);
+    });
+
+    it('rejects invalid mergeMethod value', () => {
+      expect(() => AutoPilotConfigSchema.parse({ mergeMethod: 'invalid-merge' })).toThrow(ZodError);
+    });
+
+    it('rejects quota utilizationThreshold outside [0.1, 1.0]', () => {
+      expect(() =>
+        AutoPilotConfigSchema.parse({ quota: { utilizationThreshold: 0.05 } })
+      ).toThrow(ZodError);
+      expect(() =>
+        AutoPilotConfigSchema.parse({ quota: { utilizationThreshold: 1.5 } })
+      ).toThrow(ZodError);
+    });
+
+    it('rejects quota tokenCeiling less than 10000', () => {
+      expect(() =>
+        AutoPilotConfigSchema.parse({ quota: { tokenCeiling: 9999 } })
+      ).toThrow(ZodError);
+    });
+  });
+});
+
+describe('parseSpecsOption', () => {
+  it('correctly parses a single numeric spec string', () => {
+    const result = parseSpecsOption('50');
+    expect(result).toEqual([50]);
+  });
+
+  it('correctly parses comma-separated spec numbers', () => {
+    const result = parseSpecsOption('50,51,52');
+    expect(result).toEqual([50, 51, 52]);
+  });
+
+  it('trims whitespace around comma-separated tokens', () => {
+    const result = parseSpecsOption('  50 ,  51  , 52  ');
+    expect(result).toEqual([50, 51, 52]);
+  });
+
+  it('correctly parses an array of spec strings', () => {
+    const result = parseSpecsOption(['50', '51', '52']);
+    expect(result).toEqual([50, 51, 52]);
+  });
+
+  it('correctly parses an array containing comma-separated strings', () => {
+    const result = parseSpecsOption(['50,51', '52,53']);
+    expect(result).toEqual([50, 51, 52, 53]);
+  });
+
+  it('appends to previous accumulator array without mutating original', () => {
+    const previous = [10, 20];
+    const result = parseSpecsOption('30,40', previous);
+    expect(result).toEqual([10, 20, 30, 40]);
+    expect(previous).toEqual([10, 20]);
+  });
+
+  it('deduplicates numbers within input and across previous array', () => {
+    const result = parseSpecsOption('50,51,50,52', [51, 53]);
+    expect(result).toEqual([51, 53, 50, 52]);
+  });
+
+  it('ignores non-numeric or invalid tokens gracefully', () => {
+    const result = parseSpecsOption('50,abc,,51,NaN,52');
+    expect(result).toEqual([50, 51, 52]);
+  });
+
+  it('handles empty string or empty array gracefully', () => {
+    expect(parseSpecsOption('')).toEqual([]);
+    expect(parseSpecsOption([])).toEqual([]);
+    expect(parseSpecsOption('', [10])).toEqual([10]);
+  });
+});
+
+describe('Configuration file helpers', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'imagos-config-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  describe('getConfigPath', () => {
+    it('returns .autopilot/config.json if it exists', () => {
+      const autopilotDir = path.join(tmpDir, '.autopilot');
+      fs.mkdirSync(autopilotDir, { recursive: true });
+      const configPath = path.join(autopilotDir, 'config.json');
+      fs.writeFileSync(configPath, '{}', 'utf8');
+
+      expect(getConfigPath(tmpDir)).toBe(configPath);
+    });
+
+    it('returns autopilot.config.json if legacy file exists', () => {
+      const legacyPath = path.join(tmpDir, 'autopilot.config.json');
+      fs.writeFileSync(legacyPath, '{}', 'utf8');
+
+      expect(getConfigPath(tmpDir)).toBe(legacyPath);
+    });
+
+    it('defaults to .autopilot/config.json destination if neither exists', () => {
+      expect(getConfigPath(tmpDir)).toBe(path.join(tmpDir, '.autopilot', 'config.json'));
+    });
+  });
+
+  describe('saveConfig and loadConfig', () => {
+    it('saves config to disk and loads it back accurately', async () => {
+      const configData = {
+        repository: 'owner/saved-repo',
+        maxConcurrency: 3,
+        baseBranch: 'main',
+        runner: 'agy' as const,
+        runnerConfig: {
+          agy: {
+            model: 'gemini-3.7-flash',
+            effort: 'high',
+          },
+        },
+      };
+
+      const savedPath = saveConfig(configData, undefined, tmpDir);
+      expect(fs.existsSync(savedPath)).toBe(true);
+
+      const loaded = await loadConfig(undefined, tmpDir);
+      expect(loaded.repository).toBe('owner/saved-repo');
+      expect(loaded.maxConcurrency).toBe(3);
+      expect(loaded.runner).toBe('agy');
+      expect(loaded.runnerConfig?.agy?.model).toBe('gemini-3.7-flash');
+      expect(loaded.runnerConfig?.agy?.effort).toBe('high');
+      expect(loaded.baseBranch).toBe('main');
+    });
+
+    it('loads config from custom file path', async () => {
+      const customFile = path.join(tmpDir, 'custom.config.json');
+      fs.writeFileSync(
+        customFile,
+        JSON.stringify({ repository: 'custom-org/custom-repo', maxConcurrency: 5 }),
+        'utf8'
+      );
+
+      const loaded = await loadConfig('custom.config.json', tmpDir);
+      expect(loaded.repository).toBe('custom-org/custom-repo');
+      expect(loaded.maxConcurrency).toBe(5);
+    });
+
+    it('throws descriptive error on invalid JSON file', async () => {
+      const invalidFile = path.join(tmpDir, '.autopilot', 'config.json');
+      fs.mkdirSync(path.dirname(invalidFile), { recursive: true });
+      fs.writeFileSync(invalidFile, '{ not valid json }', 'utf8');
+
+      await expect(loadConfig(undefined, tmpDir)).rejects.toThrow(/Failed to parse configuration file/);
+    });
+  });
+
+  describe('ensureGitIgnoreRules', () => {
+    it('creates .gitignore with .autopilot rule if .gitignore does not exist', () => {
+      ensureGitIgnoreRules(tmpDir);
+      const gitignorePath = path.join(tmpDir, '.gitignore');
+      expect(fs.existsSync(gitignorePath)).toBe(true);
+
+      const content = fs.readFileSync(gitignorePath, 'utf8');
+      expect(content).toContain('.autopilot/*');
+      expect(content).toContain('!.autopilot/config.json');
+    });
+
+    it('appends rule to existing .gitignore if not present', () => {
+      const gitignorePath = path.join(tmpDir, '.gitignore');
+      fs.writeFileSync(gitignorePath, 'node_modules\ndist\n', 'utf8');
+
+      ensureGitIgnoreRules(tmpDir);
+      const content = fs.readFileSync(gitignorePath, 'utf8');
+      expect(content).toContain('node_modules');
+      expect(content).toContain('.autopilot/*');
+    });
+
+    it('does not duplicate rule if already present in .gitignore', () => {
+      const gitignorePath = path.join(tmpDir, '.gitignore');
+      fs.writeFileSync(gitignorePath, '# custom\n.autopilot/*\n!.autopilot/config.json\n', 'utf8');
+
+      ensureGitIgnoreRules(tmpDir);
+      const content = fs.readFileSync(gitignorePath, 'utf8');
+      const occurrences = (content.match(/\.autopilot\/\*/g) || []).length;
+      expect(occurrences).toBe(1);
+    });
+  });
+});
