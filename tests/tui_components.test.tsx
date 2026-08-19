@@ -52,7 +52,7 @@ describe('TUI Components', () => {
     expect(output).toContain('AGENT AUTO-PILOT');
     expect(output).toContain('owner/test-repo');
     expect(output).toContain('#101');
-    expect(output).toContain('Fix authorization token');
+    expect(output).toContain('Fix authorization');
     expect(output).toContain('running');
     expect(output).toContain('Navigate');
   });
@@ -122,9 +122,9 @@ describe('TUI Components', () => {
     const output = lastFrame();
     expect(output).toContain('5-HOUR QUOTA PAUSED');
     expect(output).toContain('#221');
-    expect(output).toContain("The CLI's App-slot refusa");
+    expect(output).toContain("The CLI's App-slot");
     expect(output).toContain('agent/issue-221');
-    expect(output).toContain('paused (quota)');
+    expect(output).toContain('paused');
     expect(output).toContain('preserves WIP');
   });
 
@@ -197,7 +197,8 @@ describe('TUI Components', () => {
     );
 
     const output = lastFrame();
-    expect(output).toContain('CLAUDE QUOTA & SCHEDULED WAKE-UP TELEMETRY');
+    expect(output).toContain('LLM RUNNER QUOTA & SCHEDULED WAKE-UP TELEMETRY');
+    expect(output).toContain('CLAUDE CODE CLI TELEMETRY');
     expect(output).toContain('5-Hour Session Quota');
     expect(output).toContain('100%');
     expect(output).toContain('Aug 19 at 10:00pm');

@@ -5,6 +5,7 @@ import { IssueDAG } from '../github/dag.js';
 import { WorktreeManager } from '../worktree/manager.js';
 import { QuotaMonitor } from '../quota/monitor.js';
 import { RunnerRegistry } from '../runners/registry.js';
+import { RunnerFacade } from '../runners/facade.js';
 import { Notifier } from '../notifications/notifier.js';
 import { Dashboard } from '../ui/dashboard.js';
 import { StateManager } from '../state/manager.js';
@@ -16,7 +17,7 @@ export class Orchestrator {
   private dag: IssueDAG;
   private worktreeMgr: WorktreeManager;
   private quotaMonitor: QuotaMonitor;
-  private runners: RunnerRegistry;
+  private runnerFacade: RunnerFacade;
   private dashboard: Dashboard;
   private stateMgr: StateManager;
   private eventBus = AgentEventBus.getInstance();
@@ -37,7 +38,11 @@ export class Orchestrator {
     this.dag = new IssueDAG(config);
     this.worktreeMgr = new WorktreeManager();
     this.quotaMonitor = new QuotaMonitor();
-    this.runners = new RunnerRegistry(this.quotaMonitor);
+    this.runnerFacade = new RunnerFacade({
+      quotaMonitor: this.quotaMonitor,
+      defaultRunner: config.runner,
+      runnerConfig: config.runnerConfig,
+    });
     this.dashboard = new Dashboard(config);
     this.stateMgr = new StateManager();
 
@@ -159,8 +164,8 @@ export class Orchestrator {
       } catch {}
     }
 
-    // 3. If Quota is paused or session not started yet, do not dispatch new tasks
-    if (this.quotaMonitor.getStatus().isPaused || !this.isSessionStarted) {
+    // 3. If session not started yet, do not dispatch new tasks
+    if (!this.isSessionStarted) {
       return;
     }
 
@@ -211,20 +216,7 @@ export class Orchestrator {
       }
     }
 
-    // 6. Schedule Ready Tasks up to maxConcurrency (with Proactive Quota Pacing)
-    const quotaStatus = this.quotaMonitor.getStatus(
-      this.config.quota.utilizationThreshold,
-      this.config.quota.tokenCeiling
-    );
-    if (quotaStatus.rollingStats?.isApproachingLimit) {
-      const stats = quotaStatus.rollingStats;
-      const rollOffTimeStr = stats.nextRollOffAt ? stats.nextRollOffAt.toLocaleTimeString() : 'soon';
-      this.dashboard.log(
-        `⏳ Pacing Quota: 5h window at ${Math.round(stats.utilization * 100)}% (${Math.round(stats.totalOutputTokens / 1000)}k/${Math.round(stats.estimatedCeiling / 1000)}k tokens). Waiting for roll-off at ${rollOffTimeStr}.`
-      );
-      return;
-    }
-
+    // 6. Schedule Ready Tasks up to maxConcurrency (with Runner Quota Filtering)
     const readyNodes = this.dag.getReadyNodes();
     const availableSlots = this.config.maxConcurrency - this.activeTaskNumbers.size;
 
@@ -232,7 +224,17 @@ export class Orchestrator {
       return;
     }
 
-    const tasksToDispatch = readyNodes
+    // Filter tasks whose assigned runner is not currently paused due to quota
+    const unpausedNodes = readyNodes.filter((node) => {
+      const runnerName = this.runnerFacade.resolveRunnerName(node.issue, this.config.runner);
+      return !this.quotaMonitor.isRunnerPaused(runnerName);
+    });
+
+    if (unpausedNodes.length === 0) {
+      return;
+    }
+
+    const tasksToDispatch = unpausedNodes
       .filter((n) => !this.activeTaskNumbers.has(n.issue.number))
       .slice(0, availableSlots);
 
@@ -255,10 +257,7 @@ export class Orchestrator {
     });
 
     if (this.activeTaskNumbers.has(issueNumber)) {
-      const runner = this.runners.get(this.config.runner);
-      if (runner.injectPrompt) {
-        await runner.injectPrompt(issueNumber, prompt);
-      }
+      await this.runnerFacade.injectPrompt(issueNumber, prompt);
       return {
         success: true,
         message: `Injected prompt for active task #${issueNumber}. Waiting for tool call to finish before safe resume.`,
@@ -288,8 +287,9 @@ export class Orchestrator {
   private async executeTask(node: DAGNode, overrideFeedback?: string): Promise<void> {
     const { issue } = node;
     const isContinuation = await this.worktreeMgr.worktreeExists(issue.number);
+    const runnerName = this.runnerFacade.resolveRunnerName(issue, this.config.runner);
 
-    this.dashboard.log(`Dispatching Issue #${issue.number}: ${issue.title} ${isContinuation ? '(resuming)' : ''}`);
+    this.dashboard.log(`Dispatching Issue #${issue.number} [${runnerName}]: ${issue.title} ${isContinuation ? '(resuming)' : ''}`);
 
     let worktreePath = '';
     let branchName = '';
@@ -311,7 +311,7 @@ export class Orchestrator {
         url: issue.url,
         branchName,
         worktreePath,
-        runner: this.config.runner,
+        runner: runnerName,
       });
 
       this.dashboard.updateWorker({
@@ -324,8 +324,8 @@ export class Orchestrator {
 
       // 2. Post Start/Resume Comment to GitHub Issue
       const startComment = isContinuation
-        ? `🔄 **Agent Auto-Pilot resumed work**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Resumed At**: \`${new Date().toUTCString()}\`\n\n*Continuing implementation with latest feedback from comments.*`
-        : `🤖 **Agent Auto-Pilot started implementation**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${this.config.runner}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${this.config.baseBranch}\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*Delegating task to \`${this.config.runner}\` (/implement).*`;
+        ? `🔄 **Agent Auto-Pilot resumed work**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${runnerName}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Resumed At**: \`${new Date().toUTCString()}\`\n\n*Continuing implementation with latest feedback from comments.*`
+        : `🤖 **Agent Auto-Pilot started implementation**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${runnerName}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${this.config.baseBranch}\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*Delegating task to \`${runnerName}\` (/implement).*`;
 
       try {
         await this.gh.addComment(issue.number, startComment);
@@ -372,11 +372,10 @@ export class Orchestrator {
         }
       }
 
-      // 4. Run Agent (/implement)
-      const runner = this.runners.get(this.config.runner);
-      this.stateMgr.recordTaskStage(issue.number, 'AGENT_RUNNING', 'running', `Invoking ${this.config.runner} /implement`);
+      // 4. Run Agent via RunnerFacade
+      this.stateMgr.recordTaskStage(issue.number, 'AGENT_RUNNING', 'running', `Invoking ${runnerName} /implement`);
 
-      const runnerRes = await runner.run(
+      const runnerRes = await this.runnerFacade.run(
         {
           issue,
           kind: node.kind,
@@ -386,6 +385,7 @@ export class Orchestrator {
           isContinuation,
           userFeedback,
           extraPrompt: this.config.extraPrompt,
+          runnerName,
         },
         {
           cwd: worktreePath,
@@ -399,7 +399,8 @@ export class Orchestrator {
           onPid: (pid: number) => {
             this.stateMgr.recordTaskStage(issue.number, 'PID_ASSIGNED', 'running', `Process PID: ${pid}`);
           },
-        }
+        },
+        this.config.runner
       );
 
       // Check if runner was interrupted to apply developer prompt
@@ -432,6 +433,8 @@ export class Orchestrator {
 
       // Case A: Agent requested info from human
       if (hasFeedbackLabel || runnerRes.status === 'NEEDS_INFO') {
+        node.status = 'waiting_feedback';
+        node.issue.labels = updatedIssue.labels;
         this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
         this.dashboard.log(`Issue #${issue.number} parked awaiting developer feedback.`);
         return;
@@ -439,6 +442,8 @@ export class Orchestrator {
 
       // Case B: Agent completed and closed/merged the issue
       if (updatedIssue.state === 'CLOSED') {
+        node.status = 'completed';
+        node.issue.state = 'CLOSED';
         this.stateMgr.finishTaskSession(issue.number, 'completed');
         this.dashboard.log(`Issue #${issue.number} completed and closed.`);
         Notifier.notifyTaskMerged(issue.number, issue.title);
@@ -536,57 +541,56 @@ export class Orchestrator {
     return this.latestActiveWorktrees;
   }
 
+  public getRunnerFacade(): RunnerFacade {
+    return this.runnerFacade;
+  }
+
+  public getRunners(): RunnerRegistry {
+    return this.runnerFacade.getRegistry();
+  }
+
   public async pauseWorker(issueNumber: number): Promise<{ success: boolean; message: string }> {
-    const runner = this.runners.get(this.config.runner) as any;
-    if (runner && typeof runner.pause === 'function') {
-      const paused = runner.pause(issueNumber);
-      if (paused) {
-        const worker = this.dashboard.getActiveWorkers().get(issueNumber);
-        if (worker) {
-          worker.status = 'paused_quota';
-          this.dashboard.updateWorker(worker);
-        }
-        this.dashboard.log(`Paused worker for Issue #${issueNumber}`);
-        this.eventBus.emitAgentEvent({
-          issueNumber,
-          type: 'info',
-          summary: `⏸️ Worker paused by developer`,
-        });
-        return { success: true, message: `Paused worker for Issue #${issueNumber}` };
+    const paused = this.runnerFacade.pause(issueNumber);
+    if (paused) {
+      const worker = this.dashboard.getActiveWorkers().get(issueNumber);
+      if (worker) {
+        worker.status = 'paused_quota';
+        this.dashboard.updateWorker(worker);
       }
+      this.dashboard.log(`Paused worker for Issue #${issueNumber}`);
+      this.eventBus.emitAgentEvent({
+        issueNumber,
+        type: 'info',
+        summary: `⏸️ Worker paused by developer`,
+      });
+      return { success: true, message: `Paused worker for Issue #${issueNumber}` };
     }
     return { success: false, message: `Could not pause worker #${issueNumber} (no active runner process)` };
   }
 
   public async resumeWorker(issueNumber: number): Promise<{ success: boolean; message: string }> {
-    const runner = this.runners.get(this.config.runner) as any;
-    if (runner && typeof runner.resume === 'function') {
-      const resumed = runner.resume(issueNumber);
-      if (resumed) {
-        const worker = this.dashboard.getActiveWorkers().get(issueNumber);
-        if (worker) {
-          worker.status = 'running';
-          this.dashboard.updateWorker(worker);
-        }
-        this.dashboard.log(`Resumed worker for Issue #${issueNumber}`);
-        this.eventBus.emitAgentEvent({
-          issueNumber,
-          type: 'info',
-          summary: `▶️ Worker resumed by developer`,
-        });
-        return { success: true, message: `Resumed worker for Issue #${issueNumber}` };
+    const resumed = this.runnerFacade.resume(issueNumber);
+    if (resumed) {
+      const worker = this.dashboard.getActiveWorkers().get(issueNumber);
+      if (worker) {
+        worker.status = 'running';
+        this.dashboard.updateWorker(worker);
       }
+      this.dashboard.log(`Resumed worker for Issue #${issueNumber}`);
+      this.eventBus.emitAgentEvent({
+        issueNumber,
+        type: 'info',
+        summary: `▶️ Worker resumed by developer`,
+      });
+      return { success: true, message: `Resumed worker for Issue #${issueNumber}` };
     }
     return { success: false, message: `Could not resume worker #${issueNumber}` };
   }
 
   public async killAndWipeWorker(issueNumber: number): Promise<{ success: boolean; message: string }> {
-    const runner = this.runners.get(this.config.runner);
-    if (runner && typeof runner.stop === 'function') {
-      try {
-        await runner.stop(issueNumber);
-      } catch {}
-    }
+    try {
+      await this.runnerFacade.stop(issueNumber);
+    } catch {}
 
     this.activeTaskNumbers.delete(issueNumber);
     this.dashboard.removeWorker(issueNumber);

@@ -7,6 +7,8 @@ export * from './worktree/manager.js';
 export * from './quota/monitor.js';
 export * from './runners/base.js';
 export * from './runners/claude.js';
+export * from './runners/agy.js';
+export * from './runners/facade.js';
 export * from './runners/registry.js';
 export * from './notifications/notifier.js';
 export * from './pipeline/orchestrator.js';

@@ -37,7 +37,8 @@ pnpm add -g imagos
 Before running `imagos`, ensure the required CLIs are installed and authenticated:
 
 - **GitHub CLI (`gh`)**: `gh auth login`
-- **Claude CLI (`claude`)**: Run `claude` and complete login
+- **Claude CLI (`claude`)** (if using Claude runner): Run `claude` and complete login
+- **Antigravity CLI (`agy`)** (if using AGY runner): Run `agy` and complete login
 
 ---
 
@@ -85,7 +86,18 @@ imagos backlog -s 50,51 --ready
 | `imagos logs <issue>` | View stdout/stderr output for a specific task |
 | `imagos resume` | Unpause workers after quota reset or clear a paused state |
 | `imagos clean` | Remove inactive worktrees, temporary branches, and finished sessions |
-| `imagos init` | Generate `.autopilot/config.json` for the current repository |
+| `imagos init` | Generate `.autopilot/config.json` (prompts for default runner: `claude`, `agy`) |
+
+---
+
+## Multi-Runner Support (Claude, AGY & extensible)
+
+`imagos` supports multiple LLM providers:
+
+- **Default Runner**: Configured via `runner` in `.autopilot/config.json` (e.g. `"runner": "claude"` or `"runner": "agy"`).
+- **Per-Issue Tagging**: Override the runner for any individual ticket by applying a GitHub label:
+  - `runner:agy` / `agent:agy` -> routes task to Antigravity CLI (`agy`)
+  - `runner:claude` / `agent:claude` -> routes task to Claude Code CLI (`claude`)
 
 ---
 
@@ -103,6 +115,12 @@ imagos backlog -s 50,51 --ready
   "pollIntervalSeconds": 30,
   "extraPrompt": "",
   "runner": "claude",
+  "runnerConfig": {
+    "agy": {
+      "model": "gemini-2.5-pro",
+      "effort": "high"
+    }
+  },
   "autoMerge": true,
   "mergeMethod": "squash",
   "cleanupWorktreeOnClose": true,

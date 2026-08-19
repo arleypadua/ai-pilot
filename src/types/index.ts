@@ -62,6 +62,7 @@ export interface DAGNode {
   parentNumber?: number;
   children: number[];
   status: TaskStatus;
+  runnerName?: string;
 }
 
 export interface TaskContext {
@@ -73,6 +74,7 @@ export interface TaskContext {
   isContinuation?: boolean;
   userFeedback?: string;
   extraPrompt?: string;
+  runnerName?: string;
 }
 
 export interface RunnerResult {
@@ -85,16 +87,19 @@ export interface RunnerResult {
   injectedPrompt?: string;
 }
 
-export interface AgyRunnerConfig {
+export interface AgyConfig {
   model?: string;
-  effort?: string;
+  effort?: 'low' | 'medium' | 'high' | string;
+  printTimeout?: string;
 }
 
 export interface RunnerConfig {
-  agy?: AgyRunnerConfig;
+  agy?: AgyConfig;
   claude?: Record<string, unknown>;
   [key: string]: unknown;
 }
+
+export type RunnerConfigs = RunnerConfig;
 
 export interface AutoPilotConfig {
   repository?: string;
@@ -104,9 +109,9 @@ export interface AutoPilotConfig {
   maxConcurrency: number;
   pollIntervalSeconds: number;
   extraPrompt?: string;
-  runner: 'claude' | 'agy' | 'pi' | 'custom';
-  customRunnerCommand?: string;
+  runner: string;
   runnerConfig?: RunnerConfig;
+  customRunnerCommand?: string;
   autoMerge: boolean;
   mergeMethod: 'squash' | 'merge' | 'rebase';
   cleanupWorktreeOnClose: boolean;

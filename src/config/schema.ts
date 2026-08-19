@@ -26,7 +26,18 @@ export const AutoPilotConfigSchema = z.object({
   maxConcurrency: z.number().int().min(1).default(2),
   pollIntervalSeconds: z.number().int().min(5).default(30),
   extraPrompt: z.string().optional(),
-  runner: z.enum(['claude', 'agy', 'pi', 'custom']).default('claude'),
+  runner: z.string().default('claude'),
+  runnerConfig: z
+    .object({
+      agy: z
+        .object({
+          model: z.string().optional(),
+          effort: z.enum(['low', 'medium', 'high']).optional(),
+          printTimeout: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   customRunnerCommand: z.string().optional(),
   runnerConfig: RunnerConfigSchema.optional(),
   autoMerge: z.boolean().default(true),

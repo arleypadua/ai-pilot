@@ -12,6 +12,7 @@ export interface WorkerItem {
   status: TaskStatus;
   startedAt?: Date;
   isWip?: boolean;
+  runnerName?: string;
 }
 
 interface MasterDashboardProps {
@@ -57,22 +58,45 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
       return <Text color="green">● Quota Status: Normal</Text>;
     }
 
-    if (quotaStatus.isPaused && quotaStatus.resetAt) {
-      const remainingMs = Math.max(0, quotaStatus.resetAt.getTime() - Date.now());
-      const remainingMins = Math.ceil(remainingMs / (60 * 1000));
-      return (
+    const pauseBanner = (quotaStatus.isPaused && quotaStatus.resetAt) ? (
+      <Box flexDirection="column" marginBottom={0}>
+        <Text backgroundColor="red" color="white" bold>
+          {` ⏳ ${quotaStatus.pausedRunner ? quotaStatus.pausedRunner.toUpperCase() + ' ' : ''}5-HOUR QUOTA PAUSED `}
+        </Text>
+        <Text color="red">
+          Resumes at {quotaStatus.resetAt.toLocaleTimeString()} (~{Math.ceil(Math.max(0, quotaStatus.resetAt.getTime() - Date.now()) / (60 * 1000))} min remaining)
+        </Text>
+      </Box>
+    ) : null;
+
+    let telemetryBars: React.ReactNode = null;
+
+    if (quotaStatus.runnerUsage && Object.keys(quotaStatus.runnerUsage).length > 0) {
+      telemetryBars = (
         <Box flexDirection="column">
-          <Text backgroundColor="red" color="white" bold>
-            {' ⏳ 5-HOUR QUOTA PAUSED '}
-          </Text>
-          <Text color="red">
-            Resumes at {quotaStatus.resetAt.toLocaleTimeString()} (~{remainingMins} min remaining)
-          </Text>
+          {Object.values(quotaStatus.runnerUsage).map((rUsage) => {
+            return (
+              <Box key={rUsage.runnerName} flexDirection="row" marginBottom={0}>
+                <Text bold color={rUsage.runnerName === 'agy' ? 'blue' : 'cyan'}>
+                  {`● ${rUsage.displayName}: `}
+                </Text>
+                {rUsage.buckets.map((b, i) => {
+                  const barLen = 8;
+                  const filled = Math.min(barLen, Math.round((b.usedPercentage / 100) * barLen));
+                  const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, barLen - filled));
+                  const color = b.usedPercentage >= 95 ? 'red' : b.usedPercentage >= 80 ? 'yellow' : 'green';
+                  return (
+                    <Text key={i} color={color}>
+                      {i > 0 ? '  ' : ''}{b.name}: [{bar}] {b.usedPercentage}%
+                    </Text>
+                  );
+                })}
+              </Box>
+            );
+          })}
         </Box>
       );
-    }
-
-    if (quotaStatus.liveUsage) {
+    } else if (quotaStatus.liveUsage) {
       const live = quotaStatus.liveUsage;
       const sessPct = live.sessionUsedPercentage;
       const barLen = 12;
@@ -80,7 +104,7 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
       const sessBar = '█'.repeat(sessFilled) + '░'.repeat(Math.max(0, barLen - sessFilled));
       const sessColor = sessPct >= 100 ? 'red' : sessPct >= 80 ? 'yellow' : 'green';
 
-      return (
+      telemetryBars = (
         <Box flexDirection="column">
           <Text color={sessColor}>
             ● 5h Session Quota: [{sessBar}] {sessPct}% used
@@ -93,26 +117,16 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
           )}
         </Box>
       );
+    } else if (!pauseBanner) {
+      telemetryBars = <Text color="green">● Quota Status: Normal (headroom healthy)</Text>;
     }
 
-    if (quotaStatus.rollingStats) {
-      const stats = quotaStatus.rollingStats;
-      const pct = Math.round(stats.utilization * 100);
-      const usedK = Math.round(stats.totalOutputTokens / 1000);
-      const capK = Math.round(stats.estimatedCeiling / 1000);
-      const barLen = 12;
-      const filled = Math.min(barLen, Math.max(0, Math.round((pct / 100) * barLen)));
-      const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, barLen - filled));
-      const meterColor = pct >= 85 ? 'red' : pct >= 70 ? 'yellow' : 'green';
-
-      return (
-        <Text color={meterColor}>
-          ● 5h Rolling Quota: [{bar}] {pct}% ({usedK}k / {capK}k output tokens)
-        </Text>
-      );
-    }
-
-    return <Text color="green">● Quota Status: Normal (5h window healthy)</Text>;
+    return (
+      <Box flexDirection="column">
+        {pauseBanner}
+        {telemetryBars}
+      </Box>
+    );
   };
 
   const renderStatusBadge = (worker: WorkerItem) => {
@@ -172,7 +186,7 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
           </Text>
         </Box>
         <Text color="gray">
-          Runner: {config.runner} (/implement) | Concurrency: {workers.filter((w) => !w.isWip).length}/{config.maxConcurrency}
+          Default Runner: {config.runner} | Concurrency: {workers.filter((w) => !w.isWip).length}/{config.maxConcurrency}
         </Text>
       </Box>
 
@@ -191,19 +205,22 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
         ) : (
           <Box flexDirection="column">
             <Box flexDirection="row" marginBottom={0}>
-              <Box width={10}>
+              <Box width={9}>
                 <Text bold color="cyan">Issue</Text>
               </Box>
-              <Box width={32}>
-                <Text bold color="cyan">Title</Text>
+              <Box width={9}>
+                <Text bold color="cyan">Runner</Text>
               </Box>
               <Box width={26}>
+                <Text bold color="cyan">Title</Text>
+              </Box>
+              <Box width={24}>
                 <Text bold color="cyan">Branch</Text>
               </Box>
-              <Box width={18}>
+              <Box width={16}>
                 <Text bold color="cyan">Status</Text>
               </Box>
-              <Box width={16}>
+              <Box width={14}>
                 <Text bold color="cyan">Elapsed</Text>
               </Box>
             </Box>
@@ -211,30 +228,36 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
               const isSelected = index === selectedIndex;
               const prefix = isSelected ? '❯ ' : '  ';
               const issueStr = `${prefix}#${worker.issueNumber}`;
-              const titleStr = worker.title.length > 28 ? `${worker.title.slice(0, 25)}...` : worker.title;
-              const branchStr = worker.branchName.length > 24 ? `${worker.branchName.slice(0, 21)}...` : worker.branchName;
+              const runnerStr = worker.runnerName || config.runner;
+              const titleStr = worker.title.length > 24 ? `${worker.title.slice(0, 21)}...` : worker.title;
+              const branchStr = worker.branchName.length > 22 ? `${worker.branchName.slice(0, 19)}...` : worker.branchName;
 
               return (
                 <Box key={worker.issueNumber} flexDirection="row">
-                  <Box width={10}>
+                  <Box width={9}>
                     <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
                       {issueStr}
                     </Text>
                   </Box>
-                  <Box width={32}>
-                    <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
-                      {titleStr}
+                  <Box width={9}>
+                    <Text color={runnerStr === 'agy' ? 'blue' : 'cyan'}>
+                      {runnerStr}
                     </Text>
                   </Box>
                   <Box width={26}>
                     <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
+                      {titleStr}
+                    </Text>
+                  </Box>
+                  <Box width={24}>
+                    <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
                       {branchStr}
                     </Text>
                   </Box>
-                  <Box width={18}>
+                  <Box width={16}>
                     {renderStatusBadge(worker)}
                   </Box>
-                  <Box width={16}>
+                  <Box width={14}>
                     {renderElapsed(worker)}
                   </Box>
                 </Box>

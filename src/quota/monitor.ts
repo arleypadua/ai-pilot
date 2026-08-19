@@ -2,58 +2,52 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execa } from 'execa';
+import type {
+  ClaudeLiveUsage,
+  QuotaStatus,
+  RollingWindowStats,
+  RunnerLiveUsage,
+  RunnerPauseInfo,
+  UsageProvider,
+} from './types.js';
+import { ClaudeUsageProvider } from './providers/claude.js';
+import { AgyUsageProvider } from './providers/agy.js';
 
-export interface ClaudeLiveUsage {
-  sessionUsedPercentage: number;
-  sessionResetText?: string;
-  sessionResetAt?: Date;
-  weekUsedPercentage?: number;
-  weekResetText?: string;
-  lastFetchedAt: Date;
-}
-
-export interface RollingWindowStats {
-  turnsCount: number;
-  totalOutputTokens: number;
-  totalInputTokens: number;
-  totalCacheReadTokens: number;
-  totalCacheCreateTokens: number;
-  earliestTurnTimestamp?: number;
-  nextRollOffAt?: Date;
-  tokensExpiringInNextHour: number;
-  burnRatePerMinute: number;
-  estimatedCeiling: number;
-  utilization: number;
-  isApproachingLimit: boolean;
-}
-
-export interface QuotaStatus {
-  isPaused: boolean;
-  pausedAt?: Date;
-  resetAt?: Date;
-  reason?: string;
-  activePids: number[];
-  rollingStats?: RollingWindowStats;
-  liveUsage?: ClaudeLiveUsage;
-}
+export * from './types.js';
+export { ClaudeUsageProvider } from './providers/claude.js';
+export { AgyUsageProvider } from './providers/agy.js';
 
 export class QuotaMonitor extends EventEmitter {
   private isPaused: boolean = false;
   private pausedAt?: Date;
   private resetAt?: Date;
   private pauseReason?: string;
-  private activePids: Set<number> = new Set();
+  private activePids: Map<number, string> = new Map();
   private resumeTimeout?: NodeJS.Timeout;
-  private cachedLiveUsage: ClaudeLiveUsage | null = null;
-  private lastLiveFetchTime = 0;
+  private providers: Map<string, UsageProvider> = new Map();
+  private runnerUsages: Map<string, RunnerLiveUsage> = new Map();
+  private pausedRunners: Map<string, RunnerPauseInfo> = new Map();
+  private claudeProvider: ClaudeUsageProvider;
+  private agyProvider: AgyUsageProvider;
 
   constructor() {
     super();
+    this.claudeProvider = new ClaudeUsageProvider();
+    this.agyProvider = new AgyUsageProvider();
+    this.registerProvider(this.claudeProvider);
+    this.registerProvider(this.agyProvider);
   }
 
-  public registerPid(pid: number): void {
-    this.activePids.add(pid);
+  public registerProvider(provider: UsageProvider): void {
+    this.providers.set(provider.name, provider);
+  }
+
+  public getProvider(name: string): UsageProvider | undefined {
+    return this.providers.get(name);
+  }
+
+  public registerPid(pid: number, runnerName: string = 'claude'): void {
+    this.activePids.set(pid, runnerName.toLowerCase());
   }
 
   public unregisterPid(pid: number): void {
@@ -70,10 +64,13 @@ export class QuotaMonitor extends EventEmitter {
       'rate limit reached',
       '429 too many requests',
       '5-hour limit',
+      'five hour limit',
       'hit your 5-hour limit',
       'hit your usage limit',
       'rate_limit_error',
       'exhausted your quota',
+      'resource_exhausted',
+      'quota exceeded',
       'overloaded_error',
     ];
 
@@ -84,16 +81,29 @@ export class QuotaMonitor extends EventEmitter {
 
     let resetAt: Date | undefined = undefined;
 
-    // 1. Try parsing "resets in X hours Y minutes" (e.g. "resets in 2 hours 30 minutes", "resets in 4h")
-    const inHoursMatch = lower.match(/resets?\s+(?:in|after)\s+(\d+)\s*h(?:ours?)?(?:\s*(\d+)\s*m(?:inutes?)?)?/i);
-    if (inHoursMatch) {
-      const hours = parseInt(inHoursMatch[1], 10);
-      const minutes = inHoursMatch[2] ? parseInt(inHoursMatch[2], 10) : 0;
-      const ms = (hours * 60 + minutes) * 60 * 1000;
-      resetAt = new Date(Date.now() + ms);
+    // 1. Try parsing ISO timestamp in output (e.g. 2026-08-20T01:20:27Z)
+    const isoMatch = text.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?/);
+    if (isoMatch) {
+      try {
+        const parsed = new Date(isoMatch[0]);
+        if (!isNaN(parsed.getTime()) && parsed.getTime() > Date.now()) {
+          resetAt = parsed;
+        }
+      } catch {}
     }
 
-    // 2. Try parsing "resets in X minutes"
+    // 2. Try parsing "resets in X hours Y minutes" (e.g. "resets in 2 hours 30 minutes", "resets in 4h")
+    if (!resetAt) {
+      const inHoursMatch = lower.match(/resets?\s+(?:in|after)\s+(\d+)\s*h(?:ours?)?(?:\s*(\d+)\s*m(?:inutes?)?)?/i);
+      if (inHoursMatch) {
+        const hours = parseInt(inHoursMatch[1], 10);
+        const minutes = inHoursMatch[2] ? parseInt(inHoursMatch[2], 10) : 0;
+        const ms = (hours * 60 + minutes) * 60 * 1000;
+        resetAt = new Date(Date.now() + ms);
+      }
+    }
+
+    // 3. Try parsing "resets in X minutes"
     if (!resetAt) {
       const inMinsMatch = lower.match(/resets?\s+(?:in|after)\s+(\d+)\s*m(?:inutes?)?/i);
       if (inMinsMatch) {
@@ -102,7 +112,7 @@ export class QuotaMonitor extends EventEmitter {
       }
     }
 
-    // 3. Try parsing "resets 5pm", "resets at 5pm", "resets 5:00pm", "resets 17:00", "resets at 17:00"
+    // 4. Try parsing "resets 5pm", "resets at 5pm", "resets 5:00pm", "resets 17:00", "resets at 17:00"
     if (!resetAt) {
       const timeMatch = text.match(/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
       if (timeMatch) {
@@ -116,7 +126,6 @@ export class QuotaMonitor extends EventEmitter {
         const target = new Date();
         target.setHours(hour, minute, 0, 0);
         if (target.getTime() <= Date.now()) {
-          // If the computed time is earlier today, it means tomorrow
           target.setDate(target.getDate() + 1);
         }
         resetAt = target;
@@ -131,24 +140,48 @@ export class QuotaMonitor extends EventEmitter {
     return {
       isRateLimited: true,
       resetAt,
-      reason: 'Claude 5-Hour / Usage Quota Exceeded',
+      reason: 'Usage / Quota Limit Exceeded',
     };
   }
 
-  public triggerQuotaPause(resetAt: Date, reason: string = 'Quota limit reached'): void {
-    if (this.isPaused) return;
+  public isRunnerPaused(runnerName: string): boolean {
+    const pauseInfo = this.pausedRunners.get(runnerName.toLowerCase());
+    if (!pauseInfo) return false;
+
+    if (pauseInfo.resetAt.getTime() <= Date.now()) {
+      this.resumeFromQuota(runnerName);
+      return false;
+    }
+
+    return true;
+  }
+
+  public triggerQuotaPause(
+    resetAt: Date,
+    reason: string = 'Quota limit reached',
+    runnerName: string = 'claude'
+  ): void {
+    const rName = runnerName.toLowerCase();
+    this.pausedRunners.set(rName, {
+      runnerName: rName,
+      pausedAt: new Date(),
+      resetAt,
+      reason,
+    });
 
     this.isPaused = true;
     this.pausedAt = new Date();
     this.resetAt = resetAt;
     this.pauseReason = reason;
 
-    // Send SIGSTOP to all active child PIDs to freeze RAM execution
-    for (const pid of this.activePids) {
-      try {
-        process.kill(pid, 'SIGSTOP');
-      } catch {
-        // Process may have already exited
+    // Send SIGSTOP only to active child PIDs of the paused runner
+    for (const [pid, runner] of this.activePids.entries()) {
+      if (runner === rName) {
+        try {
+          process.kill(pid, 'SIGSTOP');
+        } catch {
+          // Process may have already exited
+        }
       }
     }
 
@@ -157,6 +190,7 @@ export class QuotaMonitor extends EventEmitter {
       pausedAt: this.pausedAt,
       resetAt: this.resetAt,
       reason: this.pauseReason,
+      runnerName: rName,
       waitMs,
     });
 
@@ -165,34 +199,51 @@ export class QuotaMonitor extends EventEmitter {
     }
 
     this.resumeTimeout = setTimeout(() => {
-      this.resumeFromQuota();
+      this.resumeFromQuota(rName);
     }, waitMs);
   }
 
-  public resumeFromQuota(): void {
-    if (!this.isPaused) return;
+  public resumeFromQuota(runnerName?: string): void {
+    const targetRunner = runnerName ? runnerName.toLowerCase() : undefined;
 
-    if (this.resumeTimeout) {
-      clearTimeout(this.resumeTimeout);
-      this.resumeTimeout = undefined;
+    if (targetRunner) {
+      this.pausedRunners.delete(targetRunner);
+    } else {
+      this.pausedRunners.clear();
     }
 
-    // Send SIGCONT to resume all frozen child PIDs
-    for (const pid of this.activePids) {
-      try {
-        process.kill(pid, 'SIGCONT');
-      } catch {
-        // Process might have terminated
+    // Send SIGCONT to resume frozen child PIDs of this runner
+    for (const [pid, runner] of this.activePids.entries()) {
+      if (!targetRunner || runner === targetRunner) {
+        try {
+          process.kill(pid, 'SIGCONT');
+        } catch {
+          // Process might have terminated
+        }
       }
     }
 
-    this.isPaused = false;
-    const previousResetAt = this.resetAt;
-    this.pausedAt = undefined;
-    this.resetAt = undefined;
-    this.pauseReason = undefined;
+    if (this.pausedRunners.size === 0) {
+      if (this.resumeTimeout) {
+        clearTimeout(this.resumeTimeout);
+        this.resumeTimeout = undefined;
+      }
 
-    this.emit('quota_resumed', { resumedAt: new Date(), previousResetAt });
+      const previousResetAt = this.resetAt;
+      this.isPaused = false;
+      this.pausedAt = undefined;
+      this.resetAt = undefined;
+      this.pauseReason = undefined;
+
+      this.emit('quota_resumed', { resumedAt: new Date(), previousResetAt, runnerName: targetRunner });
+    } else {
+      // Pick the next soonest reset among remaining paused runners
+      const nextPaused = Array.from(this.pausedRunners.values()).sort(
+        (a, b) => a.resetAt.getTime() - b.resetAt.getTime()
+      )[0];
+      this.resetAt = nextPaused.resetAt;
+      this.pauseReason = nextPaused.reason;
+    }
   }
 
   public scanRollingWindowUsage(
@@ -251,7 +302,6 @@ export class QuotaMonitor extends EventEmitter {
                             recentTokens += output;
                           }
 
-                          // If this turn will roll off in the next 1 hour:
                           const rollOffTime = ts + fiveHoursMs;
                           if (rollOffTime <= oneHourFromNow) {
                             tokensExpiringNextHour += output;
@@ -292,102 +342,77 @@ export class QuotaMonitor extends EventEmitter {
     };
   }
 
-  private parseResetTimeString(str: string): Date | undefined {
-    const timeMatch = str.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
-    if (timeMatch) {
-      let hour = parseInt(timeMatch[1], 10);
-      const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-      const ampm = timeMatch[3]?.toLowerCase();
-
-      if (ampm === 'pm' && hour < 12) hour += 12;
-      if (ampm === 'am' && hour === 12) hour = 0;
-
-      const target = new Date();
-      target.setHours(hour, minute, 0, 0);
-      if (target.getTime() <= Date.now()) {
-        target.setDate(target.getDate() + 1);
-      }
-      return target;
-    }
-    return undefined;
-  }
-
   public async fetchLiveUsage(forceRefresh = false): Promise<ClaudeLiveUsage | null> {
-    const now = Date.now();
-    // Cache for 60 seconds unless forced
-    if (!forceRefresh && this.cachedLiveUsage && now - this.lastLiveFetchTime < 60 * 1000) {
-      return this.cachedLiveUsage;
+    for (const [name, provider] of this.providers.entries()) {
+      try {
+        const isAvailable = provider.isAvailable ? await provider.isAvailable() : true;
+        if (!isAvailable) {
+          this.runnerUsages.delete(name);
+          continue;
+        }
+
+        const usage = await provider.fetchUsage(forceRefresh);
+        if (usage) {
+          this.runnerUsages.set(name, usage);
+        }
+      } catch {
+        // Individual provider failure is non-fatal
+      }
     }
 
-    try {
-      const { stdout } = await execa('claude', ['-p', '/usage'], {
-        stdin: 'ignore',
-        timeout: 10000,
-        env: {
-          ...process.env,
-          CI: 'true',
-        },
-      });
+    const claudeLive = (await this.claudeProvider.isAvailable()) ? this.claudeProvider.getCachedLiveUsage() : null;
 
-      const sessionMatch = stdout.match(/Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([^\n\r]+))?/i);
-      const weekMatch = stdout.match(/Current week(?:\s*\(all models\))?:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([^\n\r]+))?/i);
-
-      let sessionUsedPercentage = 0;
-      let sessionResetText: string | undefined = undefined;
-      let sessionResetAt: Date | undefined = undefined;
-
-      if (sessionMatch) {
-        sessionUsedPercentage = parseInt(sessionMatch[1], 10);
-        sessionResetText = sessionMatch[2]?.trim();
-        if (sessionResetText) {
-          sessionResetAt = this.parseResetTimeString(sessionResetText);
-        }
+    // Check if Claude 5h limit is reached
+    if (claudeLive && claudeLive.sessionUsedPercentage >= 100 && claudeLive.sessionResetAt) {
+      if (!this.isRunnerPaused('claude')) {
+        this.triggerQuotaPause(claudeLive.sessionResetAt, `Claude Live Session Quota: 100% used (resets ${claudeLive.sessionResetText})`, 'claude');
       }
-
-      let weekUsedPercentage: number | undefined = undefined;
-      let weekResetText: string | undefined = undefined;
-      if (weekMatch) {
-        weekUsedPercentage = parseInt(weekMatch[1], 10);
-        weekResetText = weekMatch[2]?.trim();
-      }
-
-      this.cachedLiveUsage = {
-        sessionUsedPercentage,
-        sessionResetText,
-        sessionResetAt,
-        weekUsedPercentage,
-        weekResetText,
-        lastFetchedAt: new Date(),
-      };
-      this.lastLiveFetchTime = now;
-
-      // Automatically sync pause / resume state:
-      if (sessionUsedPercentage >= 100 && sessionResetAt) {
-        if (!this.isPaused) {
-          this.triggerQuotaPause(sessionResetAt, `Claude Live Session Quota: 100% used (resets ${sessionResetText})`);
-        }
-      } else if (this.isPaused && sessionUsedPercentage < 100) {
-        // Plan was upgraded or window refreshed!
-        this.resumeFromQuota();
-      }
-
-      return this.cachedLiveUsage;
-    } catch {
-      return this.cachedLiveUsage;
+    } else if (this.isRunnerPaused('claude') && claudeLive && claudeLive.sessionUsedPercentage < 100) {
+      this.resumeFromQuota('claude');
     }
+
+    // Check if AGY 5h limit is reached
+    const agyUsage = this.runnerUsages.get('agy');
+    if (agyUsage) {
+      const fiveHourBucket = agyUsage.buckets.find((b) => b.windowType === 'five_hour' && b.usedPercentage >= 100);
+      if (fiveHourBucket && fiveHourBucket.resetAt) {
+        if (!this.isRunnerPaused('agy')) {
+          this.triggerQuotaPause(fiveHourBucket.resetAt, `AGY Quota: 100% used for ${fiveHourBucket.name}`, 'agy');
+        }
+      } else if (this.isRunnerPaused('agy')) {
+        this.resumeFromQuota('agy');
+      }
+    }
+
+    return claudeLive;
   }
 
   public getStatus(utilizationThreshold: number = 0.85, customCeiling?: number): QuotaStatus {
     const rollingStats = this.scanRollingWindowUsage(utilizationThreshold, customCeiling);
+    const runnerUsageRecord: Record<string, RunnerLiveUsage> = {};
+    for (const [key, value] of this.runnerUsages.entries()) {
+      runnerUsageRecord[key] = value;
+    }
+
+    const pausedRunnersRecord: Record<string, RunnerPauseInfo> = {};
+    for (const [key, value] of this.pausedRunners.entries()) {
+      pausedRunnersRecord[key] = value;
+    }
+
+    const pausedKeys = Array.from(this.pausedRunners.keys());
+    const pausedRunner = pausedKeys.length > 0 ? pausedKeys.join(', ') : undefined;
 
     return {
-      isPaused: this.isPaused,
+      isPaused: this.pausedRunners.size > 0,
       pausedAt: this.pausedAt,
       resetAt: this.resetAt,
       reason: this.pauseReason,
-      activePids: Array.from(this.activePids),
+      pausedRunner,
+      pausedRunners: Object.keys(pausedRunnersRecord).length > 0 ? pausedRunnersRecord : undefined,
+      activePids: Array.from(this.activePids.keys()),
       rollingStats,
-      liveUsage: this.cachedLiveUsage || undefined,
+      liveUsage: this.claudeProvider.getCachedLiveUsage() || undefined,
+      runnerUsage: Object.keys(runnerUsageRecord).length > 0 ? runnerUsageRecord : undefined,
     };
   }
 

@@ -1,4 +1,16 @@
+import { execa } from 'execa';
 import type { RunnerResult, TaskContext } from '../types/index.js';
+
+export async function isBinaryAvailable(binaryName: string): Promise<boolean> {
+  try {
+    const isWindows = process.platform === 'win32';
+    const cmd = isWindows ? 'where' : 'which';
+    const { exitCode } = await execa(cmd, [binaryName], { reject: false });
+    return exitCode === 0;
+  } catch {
+    return false;
+  }
+}
 
 export interface RunnerOptions {
   cwd: string;
@@ -15,4 +27,5 @@ export interface AgentRunner {
   stop?(issueNumber: number): Promise<void>;
   pause?(issueNumber: number): boolean;
   resume?(issueNumber: number): boolean;
+  isAvailable?(): Promise<boolean>;
 }

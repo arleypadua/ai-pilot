@@ -34,6 +34,16 @@ export class IssueDAG {
     // First pass: create all nodes
     for (const issue of issues) {
       const deps = parseIssueDependencies(issue);
+      let runnerName = this.config.runner || 'claude';
+      if (issue.labels) {
+        for (const label of issue.labels) {
+          const match = label.name.match(/^(?:runner|agent):([a-zA-Z0-9_-]+)$/i);
+          if (match && match[1]) {
+            runnerName = match[1].toLowerCase();
+            break;
+          }
+        }
+      }
       const node: DAGNode = {
         issue,
         kind: deps.kind,
@@ -42,6 +52,7 @@ export class IssueDAG {
         parentNumber: deps.parentNumber,
         children: [...deps.subTaskNumbers],
         status: 'pending',
+        runnerName,
       };
       this.nodes.set(issue.number, node);
     }
