@@ -59,35 +59,38 @@ export class Orchestrator {
       throw new Error('gh CLI is not authenticated. Please run `gh auth login` first.');
     }
 
-    // Main polling loop
-    const runLoop = async () => {
-      if (!this.isRunning) return;
+    this.stateMgr.updateDaemonStatus('running');
 
+    // Initial fetch of Claude live usage from /usage
+    await this.quotaMonitor.fetchLiveUsage(true);
+
+    // Initial tick
+    await this.tick();
+
+    // Setup polling
+    this.pollTimer = setInterval(async () => {
       try {
         await this.tick();
       } catch (err: any) {
-        this.dashboard.log(`Tick error: ${err.message}`);
+        this.dashboard.log(`Polling tick error: ${err.message}`);
       }
-
-      if (this.isRunning) {
-        this.pollTimer = setTimeout(runLoop, this.config.pollIntervalSeconds * 1000);
-      }
-    };
-
-    await runLoop();
+    }, this.config.pollIntervalSeconds * 1000);
   }
 
   public stop(): void {
     this.isRunning = false;
     this.stateMgr.updateDaemonStatus('idle');
     if (this.pollTimer) {
-      clearTimeout(this.pollTimer);
+      clearInterval(this.pollTimer);
       this.pollTimer = undefined;
     }
     this.dashboard.log('Agent Auto-Pilot stopped.');
   }
 
   public async tick(): Promise<void> {
+    // 0. Fetch live Claude usage telemetry (/usage)
+    await this.quotaMonitor.fetchLiveUsage();
+
     // 1. Fetch latest issues
     const issues = await this.gh.fetchIssues();
     this.dag.build(issues);

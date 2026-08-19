@@ -60,7 +60,7 @@ export class Dashboard {
         `Concurrency: ${this.activeWorkers.size}/${this.config.maxConcurrency}`
     );
 
-    // Quota Status Banner & 5h Rolling Token Meter
+    // Quota Status Banner & Live Usage Telemetry from Claude CLI
     if (quotaStatus.isPaused && quotaStatus.resetAt) {
       const remainingMs = Math.max(0, quotaStatus.resetAt.getTime() - Date.now());
       const remainingMins = Math.ceil(remainingMs / (60 * 1000));
@@ -68,13 +68,42 @@ export class Dashboard {
         pc.bgRed(pc.white(pc.bold(' ⏳ 5-HOUR QUOTA PAUSED '))) +
           pc.red(` Resumes at ${quotaStatus.resetAt.toLocaleTimeString()} (~${remainingMins} min remaining)`)
       );
+    }
+
+    if (quotaStatus.liveUsage) {
+      const live = quotaStatus.liveUsage;
+      const sessPct = live.sessionUsedPercentage;
+      const barLen = 12;
+
+      const sessFilled = Math.min(barLen, Math.round((sessPct / 100) * barLen));
+      const sessBar = '█'.repeat(sessFilled) + '░'.repeat(Math.max(0, barLen - sessFilled));
+      const sessColor = sessPct >= 100 ? pc.red : sessPct >= 80 ? pc.yellow : pc.green;
+
+      let sessLine = sessColor(`● 5h Session Quota: [${sessBar}] ${sessPct}% used`);
+      if (live.sessionResetText) {
+        sessLine += pc.gray(` · Resets ${live.sessionResetText}`);
+      }
+      console.log(sessLine);
+
+      if (live.weekUsedPercentage !== undefined) {
+        const weekPct = live.weekUsedPercentage;
+        const weekFilled = Math.min(barLen, Math.round((weekPct / 100) * barLen));
+        const weekBar = '█'.repeat(weekFilled) + '░'.repeat(Math.max(0, barLen - weekFilled));
+        const weekColor = weekPct >= 90 ? pc.red : weekPct >= 70 ? pc.yellow : pc.cyan;
+
+        let weekLine = weekColor(`● Weekly Quota:    [${weekBar}] ${weekPct}% used`);
+        if (live.weekResetText) {
+          weekLine += pc.gray(` · Resets ${live.weekResetText}`);
+        }
+        console.log(weekLine);
+      }
     } else if (quotaStatus.rollingStats) {
       const stats = quotaStatus.rollingStats;
       const pct = Math.round(stats.utilization * 100);
       const usedK = Math.round(stats.totalOutputTokens / 1000);
       const capK = Math.round(stats.estimatedCeiling / 1000);
 
-      const barLen = 15;
+      const barLen = 12;
       const filled = Math.min(barLen, Math.round((pct / 100) * barLen));
       const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, barLen - filled));
 
@@ -82,15 +111,8 @@ export class Dashboard {
       if (pct >= 85) meterColor = pc.red;
       else if (pct >= 70) meterColor = pc.yellow;
 
-      let extraInfo = `| Burn: ${stats.burnRatePerMinute} tok/min`;
-      if (stats.nextRollOffAt) {
-        const rollOffMin = Math.max(0, Math.round((stats.nextRollOffAt.getTime() - Date.now()) / (60 * 1000)));
-        extraInfo += ` | Oldest roll-off in ~${rollOffMin}m`;
-      }
-
       console.log(
-        meterColor(`● 5h Rolling Quota: [${bar}] ${pct}% (${usedK}k / ${capK}k output tokens) `) +
-          pc.gray(extraInfo)
+        meterColor(`● 5h Rolling Quota: [${bar}] ${pct}% (${usedK}k / ${capK}k output tokens)`)
       );
     } else {
       console.log(pc.green('● Quota Status: Normal (5h window healthy)'));

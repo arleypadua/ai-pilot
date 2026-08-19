@@ -2,6 +2,16 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execa } from 'execa';
+
+export interface ClaudeLiveUsage {
+  sessionUsedPercentage: number;
+  sessionResetText?: string;
+  sessionResetAt?: Date;
+  weekUsedPercentage?: number;
+  weekResetText?: string;
+  lastFetchedAt: Date;
+}
 
 export interface RollingWindowStats {
   turnsCount: number;
@@ -25,6 +35,7 @@ export interface QuotaStatus {
   reason?: string;
   activePids: number[];
   rollingStats?: RollingWindowStats;
+  liveUsage?: ClaudeLiveUsage;
 }
 
 export class QuotaMonitor extends EventEmitter {
@@ -34,6 +45,8 @@ export class QuotaMonitor extends EventEmitter {
   private pauseReason?: string;
   private activePids: Set<number> = new Set();
   private resumeTimeout?: NodeJS.Timeout;
+  private cachedLiveUsage: ClaudeLiveUsage | null = null;
+  private lastLiveFetchTime = 0;
 
   constructor() {
     super();
@@ -279,6 +292,91 @@ export class QuotaMonitor extends EventEmitter {
     };
   }
 
+  private parseResetTimeString(str: string): Date | undefined {
+    const timeMatch = str.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+    if (timeMatch) {
+      let hour = parseInt(timeMatch[1], 10);
+      const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+      const ampm = timeMatch[3]?.toLowerCase();
+
+      if (ampm === 'pm' && hour < 12) hour += 12;
+      if (ampm === 'am' && hour === 12) hour = 0;
+
+      const target = new Date();
+      target.setHours(hour, minute, 0, 0);
+      if (target.getTime() <= Date.now()) {
+        target.setDate(target.getDate() + 1);
+      }
+      return target;
+    }
+    return undefined;
+  }
+
+  public async fetchLiveUsage(forceRefresh = false): Promise<ClaudeLiveUsage | null> {
+    const now = Date.now();
+    // Cache for 60 seconds unless forced
+    if (!forceRefresh && this.cachedLiveUsage && now - this.lastLiveFetchTime < 60 * 1000) {
+      return this.cachedLiveUsage;
+    }
+
+    try {
+      const { stdout } = await execa('claude', ['-p', '/usage'], {
+        stdin: 'ignore',
+        timeout: 10000,
+        env: {
+          ...process.env,
+          CI: 'true',
+        },
+      });
+
+      const sessionMatch = stdout.match(/Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([^\n\r]+))?/i);
+      const weekMatch = stdout.match(/Current week(?:\s*\(all models\))?:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([^\n\r]+))?/i);
+
+      let sessionUsedPercentage = 0;
+      let sessionResetText: string | undefined = undefined;
+      let sessionResetAt: Date | undefined = undefined;
+
+      if (sessionMatch) {
+        sessionUsedPercentage = parseInt(sessionMatch[1], 10);
+        sessionResetText = sessionMatch[2]?.trim();
+        if (sessionResetText) {
+          sessionResetAt = this.parseResetTimeString(sessionResetText);
+        }
+      }
+
+      let weekUsedPercentage: number | undefined = undefined;
+      let weekResetText: string | undefined = undefined;
+      if (weekMatch) {
+        weekUsedPercentage = parseInt(weekMatch[1], 10);
+        weekResetText = weekMatch[2]?.trim();
+      }
+
+      this.cachedLiveUsage = {
+        sessionUsedPercentage,
+        sessionResetText,
+        sessionResetAt,
+        weekUsedPercentage,
+        weekResetText,
+        lastFetchedAt: new Date(),
+      };
+      this.lastLiveFetchTime = now;
+
+      // Automatically sync pause / resume state:
+      if (sessionUsedPercentage >= 100 && sessionResetAt) {
+        if (!this.isPaused) {
+          this.triggerQuotaPause(sessionResetAt, `Claude Live Session Quota: 100% used (resets ${sessionResetText})`);
+        }
+      } else if (this.isPaused && sessionUsedPercentage < 100) {
+        // Plan was upgraded or window refreshed!
+        this.resumeFromQuota();
+      }
+
+      return this.cachedLiveUsage;
+    } catch {
+      return this.cachedLiveUsage;
+    }
+  }
+
   public getStatus(utilizationThreshold: number = 0.85, customCeiling?: number): QuotaStatus {
     const rollingStats = this.scanRollingWindowUsage(utilizationThreshold, customCeiling);
 
@@ -289,6 +387,7 @@ export class QuotaMonitor extends EventEmitter {
       reason: this.pauseReason,
       activePids: Array.from(this.activePids),
       rollingStats,
+      liveUsage: this.cachedLiveUsage || undefined,
     };
   }
 
