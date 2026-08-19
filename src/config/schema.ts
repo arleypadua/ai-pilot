@@ -6,6 +6,7 @@ import type { AutoPilotConfig } from '../types/index.js';
 
 export const AutoPilotConfigSchema = z.object({
   repository: z.string().optional(),
+  targetSpec: z.number().int().optional(),
   baseBranch: z.string().default('main'),
   maxConcurrency: z.number().int().min(1).default(2),
   pollIntervalSeconds: z.number().int().min(5).default(30),

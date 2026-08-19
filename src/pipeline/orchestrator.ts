@@ -24,6 +24,7 @@ export class Orchestrator {
   private pollTimer?: NodeJS.Timeout;
   private activeTaskNumbers: Set<number> = new Set();
   private lastKnownFeedbackQuestions: Map<number, string> = new Map();
+  private notifiedSpecCompletions: Set<number> = new Set();
 
   constructor(config: AutoPilotConfig) {
     this.config = config;
@@ -112,7 +113,42 @@ export class Orchestrator {
       }
     }
 
-    // 5. Identify ready candidates
+    // 5. Check if scoped Spec is completely finished
+    if (this.config.targetSpec) {
+      const specNumber = this.config.targetSpec;
+      const specCheck = this.dag.isSpecComplete(specNumber);
+
+      if (specCheck.isComplete && this.activeTaskNumbers.size === 0) {
+        if (!this.notifiedSpecCompletions.has(specNumber)) {
+          this.notifiedSpecCompletions.add(specNumber);
+
+          this.dashboard.log(
+            `🎉 Spec #${specNumber} is complete! All ${specCheck.totalTickets} child tickets are merged. Waiting for developer review and closure.`
+          );
+
+          Notifier.notifyDesktop({
+            title: `Auto-Pilot: Spec #${specNumber} Complete`,
+            message: `All ${specCheck.totalTickets} child tickets merged. Waiting for developer closure.`,
+          });
+
+          try {
+            await this.gh.addComment(
+              specNumber,
+              `🎉 **Spec Complete**: All ${specCheck.totalTickets} child tickets for this spec have been implemented and merged.\n\nWaiting for developer review and closure.`
+            );
+            await this.gh.editIssueLabels(specNumber, {
+              add: [this.config.labels.readyForHuman],
+              remove: [this.config.labels.readyForAgent],
+            });
+          } catch {
+            // Best effort
+          }
+        }
+        return;
+      }
+    }
+
+    // 6. Identify ready candidates
     const readyNodes = this.dag.getReadyNodes();
 
     for (const node of readyNodes) {

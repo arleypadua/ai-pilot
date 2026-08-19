@@ -8,6 +8,10 @@
       "type": "string",
       "description": "Target GitHub repository in 'owner/repo' format (e.g. 'arleypadua/ai-pilot')"
     },
+    "targetSpec": {
+      "type": "integer",
+      "description": "Optional issue number of a Spec to scope execution strictly to its child tickets"
+    },
     "baseBranch": {
       "type": "string",
       "default": "main",

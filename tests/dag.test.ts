@@ -90,4 +90,70 @@ describe('IssueDAG', () => {
     const feedbackNodes = dag.getWaitingFeedbackNodes();
     expect(feedbackNodes.map((n) => n.issue.number)).toEqual([3]);
   });
+
+  it('should scope execution strictly to a target spec and detect completion', () => {
+    const issues: GitHubIssue[] = [
+      {
+        number: 50,
+        title: '[Spec] User Billing Flow',
+        body: 'Subtasks:\n- [ ] #51\n- [ ] #52',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/50',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 51,
+        title: 'Stripe webhook handler',
+        body: 'Parent: #50',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/51',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 52,
+        title: 'Invoice PDF generator',
+        body: 'Parent: #50',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/52',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 99,
+        title: 'Unrelated Standalone Bugfix',
+        body: 'Fix css style',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/99',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+    ];
+
+    const dag = new IssueDAG({ ...DEFAULT_CONFIG, targetSpec: 50 });
+    dag.build(issues);
+
+    const readyNodes = dag.getReadyNodes();
+    // Only #51 and #52 belong to spec 50; #99 is filtered out
+    expect(readyNodes.map((n) => n.issue.number).sort()).toEqual([51, 52]);
+
+    const initialCheck = dag.isSpecComplete(50);
+    expect(initialCheck.isComplete).toBe(false);
+    expect(initialCheck.totalTickets).toBe(2);
+
+    // Simulate closing both tickets
+    issues[1].state = 'CLOSED';
+    issues[2].state = 'CLOSED';
+    dag.build(issues);
+
+    const completeCheck = dag.isSpecComplete(50);
+    expect(completeCheck.isComplete).toBe(true);
+    expect(completeCheck.completedTickets).toBe(2);
+    expect(completeCheck.pendingTickets).toEqual([]);
+  });
 });

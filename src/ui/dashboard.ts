@@ -52,6 +52,7 @@ export class Dashboard {
       pc.bold(pc.cyan('⚡ AGENT AUTO-PILOT')) +
         pc.gray(' | ') +
         pc.bold(`Repo: ${this.config.repository || 'Local'}`) +
+        (this.config.targetSpec ? pc.magenta(` | Scoped Spec: #${this.config.targetSpec}`) : '') +
         pc.gray(' | ') +
         pc.green(`Runner: ${this.config.runner} (/implement)`) +
         pc.gray(' | ') +

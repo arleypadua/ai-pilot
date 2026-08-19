@@ -10,6 +10,7 @@ import { GitHubClient } from './github/client.js';
 import { IssueDAG } from './github/dag.js';
 import { WorktreeManager } from './worktree/manager.js';
 import { StateManager } from './state/manager.js';
+import type { DAGNode, GitHubLabel } from './types/index.js';
 import Table from 'cli-table3';
 
 const program = new Command();
@@ -25,12 +26,14 @@ program
   .description('Start the autonomous orchestrator daemon with live terminal dashboard')
   .option('-c, --config <path>', 'Path to config.json')
   .option('-r, --repo <owner/repo>', 'Target GitHub repository (e.g. owner/repo)')
+  .option('-s, --spec <number>', 'Scope execution strictly to child tickets of a specific Spec issue', parseInt)
   .option('-m, --concurrency <number>', 'Maximum parallel tasks', parseInt)
   .option('--runner <runner>', 'Runner to use (claude, agy, pi, custom)', 'claude')
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
       if (options.repo) config.repository = options.repo;
+      if (options.spec) config.targetSpec = options.spec;
       if (options.concurrency) config.maxConcurrency = options.concurrency;
       if (options.runner) config.runner = options.runner;
 
@@ -107,9 +110,11 @@ program
   .command('status')
   .description('Display runtime metadata, active task sessions, worktrees, and DAG')
   .option('-c, --config <path>', 'Path to config.json')
+  .option('-s, --spec <number>', 'Scope display strictly to child tickets of a specific Spec issue', parseInt)
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
+      if (options.spec) config.targetSpec = options.spec;
       const stateMgr = new StateManager();
       const runtimeState = stateMgr.getState();
 
@@ -233,6 +238,7 @@ program
   .alias('queue')
   .description('Inspect the issue backlog (ready for agent, waiting on human, blocked by deps, etc.)')
   .option('-c, --config <path>', 'Path to config.json')
+  .option('-s, --spec <number>', 'Filter backlog strictly to child tickets of a specific Spec issue', parseInt)
   .option('-r, --ready', 'Show only issues ready for agent execution')
   .option('-p, --pending', 'Show only issues pending on developer feedback (needs-info / ready-for-human)')
   .option('-b, --blocked', 'Show only issues blocked by dependencies')
@@ -240,6 +246,7 @@ program
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
+      if (options.spec) config.targetSpec = options.spec;
       const gh = new GitHubClient({ repository: config.repository });
       const issues = await gh.fetchIssues();
 
@@ -250,7 +257,7 @@ program
       const readyNodes = dag.getReadyNodes();
       const waitingNodes = dag.getWaitingFeedbackNodes();
       const blockedNodes = dag.getBlockedNodes();
-      const triageNodes = allNodes.filter((n) => n.status === 'pending');
+      const triageNodes = allNodes.filter((n: DAGNode) => n.status === 'pending');
 
       const filterActive = options.ready || options.pending || options.blocked || options.triage;
 
@@ -330,7 +337,7 @@ program
           console.log(pc.gray('  No un-triaged open issues.\n'));
         } else {
           for (const node of triageNodes.slice(0, 10)) {
-            console.log(`  #${node.issue.number}: ${node.issue.title} ${pc.gray(`[${node.issue.labels.map((l) => l.name).join(', ')}]`)}`);
+            console.log(`  #${node.issue.number}: ${node.issue.title} ${pc.gray(`[${node.issue.labels.map((l: GitHubLabel) => l.name).join(', ')}]`)}`);
           }
           if (triageNodes.length > 10) {
             console.log(pc.gray(`  ... and ${triageNodes.length - 10} more`));

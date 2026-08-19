@@ -111,16 +111,81 @@ export class IssueDAG {
     return Array.from(this.nodes.values());
   }
 
+  public getSpecChildIssueNumbers(specNumber: number): number[] {
+    const specNode = this.nodes.get(specNumber);
+    const children = new Set<number>(specNode?.children || []);
+
+    for (const node of this.nodes.values()) {
+      if (node.parentNumber === specNumber) {
+        children.add(node.issue.number);
+      }
+    }
+
+    return Array.from(children);
+  }
+
+  public isSpecComplete(specNumber: number): {
+    isComplete: boolean;
+    totalTickets: number;
+    completedTickets: number;
+    pendingTickets: number[];
+  } {
+    const childIds = this.getSpecChildIssueNumbers(specNumber);
+    if (childIds.length === 0) {
+      return { isComplete: false, totalTickets: 0, completedTickets: 0, pendingTickets: [] };
+    }
+
+    const pendingTickets: number[] = [];
+    let completedTickets = 0;
+
+    for (const id of childIds) {
+      const node = this.nodes.get(id);
+      if (!node || node.status !== 'completed') {
+        pendingTickets.push(id);
+      } else {
+        completedTickets++;
+      }
+    }
+
+    return {
+      isComplete: pendingTickets.length === 0,
+      totalTickets: childIds.length,
+      completedTickets,
+      pendingTickets,
+    };
+  }
+
   public getReadyNodes(): DAGNode[] {
-    return this.getAllNodes().filter((n) => n.status === 'ready');
+    let nodes = this.getAllNodes().filter((n: DAGNode) => n.status === 'ready');
+
+    if (this.config.targetSpec) {
+      const specNumber = this.config.targetSpec;
+      const childIds = new Set(this.getSpecChildIssueNumbers(specNumber));
+
+      // Filter only nodes that belong to this spec
+      nodes = nodes.filter((n: DAGNode) => childIds.has(n.issue.number));
+    }
+
+    return nodes;
   }
 
   public getBlockedNodes(): DAGNode[] {
-    return this.getAllNodes().filter((n) => n.status === 'blocked');
+    let nodes = this.getAllNodes().filter((n: DAGNode) => n.status === 'blocked');
+    if (this.config.targetSpec) {
+      const childIds = new Set(this.getSpecChildIssueNumbers(this.config.targetSpec));
+      nodes = nodes.filter((n: DAGNode) => childIds.has(n.issue.number));
+    }
+    return nodes;
   }
 
   public getWaitingFeedbackNodes(): DAGNode[] {
-    return this.getAllNodes().filter((n) => n.status === 'waiting_feedback');
+    let nodes = this.getAllNodes().filter((n: DAGNode) => n.status === 'waiting_feedback');
+    if (this.config.targetSpec) {
+      const childIds = new Set(this.getSpecChildIssueNumbers(this.config.targetSpec));
+      childIds.add(this.config.targetSpec); // Also include the spec itself
+      nodes = nodes.filter((n: DAGNode) => childIds.has(n.issue.number));
+    }
+    return nodes;
   }
 
   public getUnresolvedBlockers(issueNumber: number): number[] {
