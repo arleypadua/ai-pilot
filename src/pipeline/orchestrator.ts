@@ -103,9 +103,9 @@ export class Orchestrator {
     // 4. Check for Spec Completion
     if (this.config.targetSpec) {
       const specNum = this.config.targetSpec;
-      const isComplete = this.dag.isSpecComplete(specNum);
+      const specStatus = this.dag.isSpecComplete(specNum);
 
-      if (isComplete && !this.notifiedSpecCompletions.has(specNum)) {
+      if (specStatus.isComplete && !this.notifiedSpecCompletions.has(specNum)) {
         this.notifiedSpecCompletions.add(specNum);
         this.dashboard.log(`Spec #${specNum} is COMPLETE! All child tickets are merged.`);
         Notifier.notifySpecComplete(specNum, `Spec #${specNum} is complete`);
