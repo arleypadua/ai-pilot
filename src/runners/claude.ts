@@ -60,6 +60,27 @@ ${issue.body || 'No description provided.'}
 2. Run test suites to verify that tests pass.
 3. If you need further clarification, comment with \`gh issue comment ${issue.number} --body "..."\` and add label \`gh issue edit ${issue.number} --add-label "needs-info" --remove-label "ready-for-agent"\`.
 4. If you discover distinct follow-up subtasks, create them via \`gh issue create --title "..." --body "Parent: #${issue.number}..." --label "ready-for-agent"\`.
+5. Do not modify files outside the scope of this issue.
+`;
+    }
+
+    if (isContinuation) {
+      return `/implement Resume Issue #${issue.number}: ${issue.title}
+
+You are resuming work on this task after a session pause. Your previous conversation history, loaded files, and worktree state are restored.
+
+### Original Issue Description
+${issue.body || 'No description provided.'}
+
+### Guidelines & Protocol
+1. Check current git status, review the changes already drafted in this worktree, and continue implementation from where you left off.
+2. Ensure existing tests pass and add new tests covering your changes.
+3. If you encounter blocking ambiguities or questions for the developer:
+   - Post your question using: \`gh issue comment ${issue.number} --body "<your question>"\`
+   - Mark for feedback using: \`gh issue edit ${issue.number} --add-label "needs-info" --remove-label "ready-for-agent"\`
+4. If you identify outstanding work that should be a separate child ticket:
+   - Create it using: \`gh issue create --title "<title>" --body "Parent: #${issue.number}\nBlocked by: #${issue.number}\n\n<details>" --label "ready-for-agent"\`
+5. Do not modify files outside the scope of this issue.
 `;
     }
 
