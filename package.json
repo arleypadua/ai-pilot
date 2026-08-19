@@ -8,13 +8,27 @@
     "agent-autopilot": "./dist/cli.js",
     "autopilot": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "schema.json"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "tsx src/cli.ts",
     "dev": "tsx watch src/cli.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "pnpm run build && pnpm test"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arleypadua/ai-pilot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/arleypadua/ai-pilot/issues"
+  },
+  "homepage": "https://github.com/arleypadua/ai-pilot#readme",
   "keywords": [
     "claude",
     "agent",
@@ -27,7 +41,6 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "agent-autopilot": "link:",
     "cli-table3": "^0.6.5",
     "commander": "^13.1.0",
     "dotenv": "^16.4.7",

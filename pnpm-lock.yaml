@@ -11,9 +11,6 @@ importers:
 
   .:
     dependencies:
-      agent-autopilot:
-        specifier: 'link:'
-        version: 'link:'
       cli-table3:
         specifier: ^0.6.5
         version: 0.6.5
