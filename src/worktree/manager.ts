@@ -57,6 +57,23 @@ export class WorktreeManager {
     return fs.existsSync(worktreePath);
   }
 
+  public async pruneWorktrees(): Promise<void> {
+    try {
+      await execa('git', ['worktree', 'prune'], { cwd: this.baseDir });
+    } catch {
+      // Best effort
+    }
+  }
+
+  public async branchExists(branchName: string): Promise<boolean> {
+    try {
+      await execa('git', ['rev-parse', '--verify', branchName], { cwd: this.baseDir });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   public async createWorktree(
     issueNumber: number,
     title: string,
@@ -70,6 +87,9 @@ export class WorktreeManager {
     }
 
     fs.mkdirSync(this.worktreesRoot, { recursive: true });
+
+    // Prune any stale worktree registrations before adding
+    await this.pruneWorktrees();
 
     // Fetch latest baseBranch
     try {
@@ -87,20 +107,31 @@ export class WorktreeManager {
     }
 
     // Check if branch already exists
-    let branchExists = false;
-    try {
-      await execa('git', ['rev-parse', '--verify', branchName], { cwd: this.baseDir });
-      branchExists = true;
-    } catch {
-      branchExists = false;
-    }
+    const branchExists = await this.branchExists(branchName);
 
     if (branchExists) {
-      await execa('git', ['worktree', 'add', worktreePath, branchName], { cwd: this.baseDir });
+      try {
+        await execa('git', ['worktree', 'add', worktreePath, branchName], { cwd: this.baseDir });
+      } catch {
+        await this.pruneWorktrees();
+        await execa('git', ['worktree', 'add', '-f', worktreePath, branchName], { cwd: this.baseDir });
+      }
     } else {
-      await execa('git', ['worktree', 'add', '-b', branchName, worktreePath, startPoint], {
-        cwd: this.baseDir,
-      });
+      try {
+        await execa('git', ['worktree', 'add', '-b', branchName, worktreePath, startPoint], {
+          cwd: this.baseDir,
+        });
+      } catch {
+        await this.pruneWorktrees();
+        const existsNow = await this.branchExists(branchName);
+        if (existsNow) {
+          await execa('git', ['worktree', 'add', '-f', worktreePath, branchName], { cwd: this.baseDir });
+        } else {
+          await execa('git', ['worktree', 'add', '-f', '-b', branchName, worktreePath, startPoint], {
+            cwd: this.baseDir,
+          });
+        }
+      }
     }
 
     return { worktreePath, branchName };
