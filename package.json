@@ -12,7 +12,8 @@
   "files": [
     "dist",
     "README.md",
-    "schema.json"
+    "schema.json",
+    "skills"
   ],
   "scripts": {
     "build": "tsc",

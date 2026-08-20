@@ -44,6 +44,11 @@ export const AVAILABLE_COMMANDS: CommandDefinition[] = [
     aliases: ['clean'],
   },
   {
+    name: '/install-skills',
+    description: 'Install Imagos AI skills into your AI agent environment via skills.sh',
+    aliases: ['install-skills', '/skills', 'skills', '/skills-install'],
+  },
+  {
     name: '/help',
     description: 'List all available slash commands and keyboard shortcuts',
     aliases: ['help'],

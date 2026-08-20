@@ -206,6 +206,36 @@ AI coding tools are subject to rolling rate limits (for example, Claude's 5-hour
 
 ---
 
+---
+
+## AI Agent Skills (Claude Code, Antigravity, Cursor, Windsurf)
+
+Imagos provides open AI agent skills compatible with the [Open Agent Skills standard](https://skills.sh) via [`vercel-labs/skills`](https://github.com/vercel-labs/skills).
+
+### Available Skills
+
+- **`imagos-summary`** (`skills/imagos-summary/SKILL.md`): Summarizes real-time Work-in-Progress (WIP), active worktrees, live vs paused sessions, quota reset times, and PR review blockers.
+- **`imagos-spec-writer`** (`skills/imagos-spec-writer/SKILL.md`): Formats, decomposes, and creates GitHub issues with native GitHub relationships (sub-issues, blockers, parent specs) and `needs-triage` / `ready-for-agent` labels. Automatically detects `mattpocock/skills` for large features or provides fast ad-hoc ticket creation.
+
+### Installing Skills
+
+Install the skills directly into your agent environment:
+
+```bash
+# Using the Imagos CLI:
+imagos install-skills
+
+# Or using npx skills directly:
+npx skills add arleypadua/imagos
+
+# Or install for a specific agent (e.g. claude, antigravity, cursor):
+npx skills add arleypadua/imagos -a claude
+```
+
+You can also run `/install-skills` inside the interactive TUI command palette.
+
+---
+
 ## CLI Commands Reference
 
 | Command                  | Description                                                                                     |
@@ -217,6 +247,7 @@ AI coding tools are subject to rolling rate limits (for example, Claude's 5-hour
 | `imagos logs <issue>`    | View stdout and stderr output logs for a specific issue session.                                |
 | `imagos resume`          | Instantly clear quota pause and force immediate task execution.                                 |
 | `imagos clean`           | Remove inactive git worktrees, temporary branches, and finished session data.                   |
+| `imagos install-skills`  | Install Imagos AI agent skills via `skills.sh` (`npx skills add arleypadua/imagos`).            |
 | `imagos init`            | Create or update `.autopilot/config.json` with repository settings and runner selection.        |
 
 ---

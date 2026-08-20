@@ -343,18 +343,58 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
       return;
     }
 
+    if (
+      cmd === '/install-skills' ||
+      cmd === 'install-skills' ||
+      cmd === '/skills' ||
+      cmd === 'skills' ||
+      cmd === '/skills-install'
+    ) {
+      setCommandResult({
+        type: 'info',
+        title: '📦 Installing Imagos Skills...',
+        lines: ['Running `npx skills add arleypadua/imagos` in background...'],
+      });
+
+      import('execa').then(({ execa }) => {
+        execa('npx', ['skills', 'add', 'arleypadua/imagos'])
+          .then(() => {
+            setCommandResult({
+              type: 'success',
+              title: '✓ Imagos Skills Installed',
+              lines: [
+                'Successfully installed Imagos AI skills into your agent environment!',
+                'Available skills: imagos-summary, imagos-spec-writer',
+              ],
+            });
+          })
+          .catch((err: any) => {
+            setCommandResult({
+              type: 'error',
+              title: '❌ Skill Installation Failed',
+              lines: [
+                err.message || 'Failed to install skills via npx skills add',
+                'You can run manually: npx skills add arleypadua/imagos',
+              ],
+            });
+          });
+      });
+      return;
+    }
+
     if (cmd === '/help' || cmd === 'help') {
       setCommandResult({
         type: 'info',
         title: 'ℹ️ Available Commands & Keyboard Shortcuts',
         lines: [
-          '/specs   - Change target specs scope or select Any unblocked task',
-          '/logs    - Open dedicated system and daemon activity logs window',
-          '/usage   - Open live quota telemetry window with scheduled wake-up timer',
-          '/close   - Gracefully shutdown orchestrator daemon and quit',
-          '/resume  - Clear quota pause and resume workers immediately',
-          '/status  - Refresh and display DAG queue summary',
-          '/clean   - Prune stale worktrees and temporary session branches',
+          '/specs          - Change target specs scope or select Any unblocked task',
+          '/logs           - Open dedicated system and daemon activity logs window',
+          '/usage          - Open live quota telemetry window with scheduled wake-up timer',
+          '/install-skills - Install Imagos AI skills into your agent environment via skills.sh',
+          '/close          - Gracefully shutdown orchestrator daemon and quit',
+          '/resume         - Clear quota pause and resume workers immediately',
+          '/status         - Refresh and display DAG queue summary',
+          '/clean          - Prune stale worktrees and temporary session branches',
           '↑/↓ or j/k - Move selection | Enter - Inspect task / View category | q - Quit',
         ],
       });

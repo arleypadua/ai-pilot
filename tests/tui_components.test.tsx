@@ -149,6 +149,26 @@ describe('TUI Components', () => {
     expect(output).toContain('(press [Tab] for /usage)');
   });
 
+  it('should suggest /install-skills in CommandPalette when filtering by /inst', () => {
+    const { lastFrame } = render(
+      <MasterDashboard
+        config={dummyConfig}
+        dag={null}
+        quotaStatus={null}
+        workers={[]}
+        selectedIndex={0}
+        activityLogs={[]}
+        commandInput="/inst"
+        isCommandMode={true}
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('COMMAND PALETTE');
+    expect(output).toContain('/install-skills');
+    expect(output).toContain('Install Imagos AI skills');
+  });
+
   it('should render command result telemetry box when /usage is executed', () => {
     const { lastFrame } = render(
       <MasterDashboard

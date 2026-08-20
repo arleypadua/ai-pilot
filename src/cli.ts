@@ -653,9 +653,40 @@ program
     }
   });
 
+// 9. INSTALL-SKILLS COMMAND
+program
+  .command('install-skills')
+  .alias('skills')
+  .description('Install Imagos AI skills into your AI agent environment via skills.sh (vercel-labs/skills)')
+  .option('-g, --global', 'Install skills globally')
+  .option('-a, --agent <agent>', 'Target specific AI agent (e.g. claude, antigravity, cursor, windsurf)')
+  .option('-r, --repo <repo>', 'Skill repository or source', 'arleypadua/imagos')
+  .option('-s, --skill <skill>', 'Specific skill to install (e.g. imagos-summary, imagos-spec-writer)')
+  .action(async (options) => {
+    try {
+      console.log(pc.bold(pc.cyan('\n=== INSTALLING IMAGOS AI SKILLS ===\n')));
+      const args = ['skills', 'add', options.repo];
+      if (options.global) args.push('-g');
+      if (options.agent) args.push('-a', options.agent);
+      if (options.skill) args.push('-s', options.skill);
+
+      console.log(pc.gray(`Executing: npx ${args.join(' ')}`));
+
+      const subprocess = execa('npx', args, {
+        stdio: 'inherit',
+      });
+      await subprocess;
+      console.log(pc.green('\n✓ Imagos skills installed successfully!'));
+    } catch (err: any) {
+      console.error(pc.red(`\nSkill installation failed: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
 export { program };
 
 if (!process.env.VITEST) {
   program.parse(process.argv);
 }
+
 
