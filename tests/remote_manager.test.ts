@@ -21,6 +21,12 @@ class MockRemoteProvider implements RemoteControlProvider {
   > = new Map();
   public textReplyHandlers: Array<(replyToMessageId: number, text: string, userId: number) => Promise<void>> = [];
 
+  public commandHandlers: Map<
+    string,
+    (args: string[], userId: number, context?: ActionContext) => Promise<void>
+  > = new Map();
+  public allowedUserIds?: number[] = [123456, 789012];
+
   public async start(): Promise<void> {
     this.isStarted = true;
   }
@@ -58,6 +64,17 @@ class MockRemoteProvider implements RemoteControlProvider {
     this.textReplyHandlers.push(handler);
   }
 
+  public onCommand(
+    command: string,
+    handler: (args: string[], userId: number, context?: ActionContext) => Promise<void>
+  ): void {
+    this.commandHandlers.set(command, handler);
+  }
+
+  public getAllowedUserIds(): number[] | undefined {
+    return this.allowedUserIds;
+  }
+
   public async triggerAction(
     payload: string,
     userId: number = 123,
@@ -80,6 +97,18 @@ class MockRemoteProvider implements RemoteControlProvider {
       await handler(replyToMessageId, text, userId);
     }
   }
+
+  public async triggerCommand(
+    command: string,
+    args: string[] = [],
+    userId: number = 123456,
+    context?: ActionContext
+  ): Promise<void> {
+    const handler = this.commandHandlers.get(command.replace(/^\//, ''));
+    if (handler) {
+      await handler(args, userId, context);
+    }
+  }
 }
 
 class MockActionController implements RemoteActionController {
@@ -88,17 +117,30 @@ class MockActionController implements RemoteActionController {
   public resumedTasks: number[] = [];
   public repliedNeedsInfo: Array<{ issueNumber: number; answer: string }> = [];
   public targetSpecs: number[][] = [];
+  public isDispatchingPaused: boolean = false;
 
   public resumeQuota(runner?: string): void {
     this.resumedRunners.push(runner);
   }
 
-  public async pauseTask(issueNumber: number): Promise<void> {
+  public async pauseTask(issueNumber: number): Promise<{ success: boolean; message: string }> {
     this.pausedTasks.push(issueNumber);
+    return { success: true, message: `Paused worker for Issue #${issueNumber}` };
   }
 
-  public async resumeTask(issueNumber: number): Promise<void> {
+  public async resumeTask(issueNumber: number): Promise<{ success: boolean; message: string }> {
     this.resumedTasks.push(issueNumber);
+    return { success: true, message: `Resumed worker for Issue #${issueNumber}` };
+  }
+
+  public pauseDispatching(): { success: boolean; message: string } {
+    this.isDispatchingPaused = true;
+    return { success: true, message: 'Task dispatching paused.' };
+  }
+
+  public resumeDispatching(): { success: boolean; message: string } {
+    this.isDispatchingPaused = false;
+    return { success: true, message: 'Task dispatching resumed.' };
   }
 
   public async replyToNeedsInfo(issueNumber: number, answer: string): Promise<void> {
@@ -110,7 +152,80 @@ class MockActionController implements RemoteActionController {
   }
 
   public getStatusSummary(): unknown {
-    return { status: 'running' };
+    return {
+      daemonStatus: this.isDispatchingPaused ? 'idle' : 'running',
+      status: this.isDispatchingPaused ? 'idle' : 'running',
+      isSessionStarted: !this.isDispatchingPaused,
+      isDispatchingPaused: this.isDispatchingPaused,
+      activeWorkerCount: 1,
+      maxConcurrency: 2,
+      activeWorkers: [
+        {
+          issueNumber: 24,
+          title: 'feat: notifications',
+          branchName: 'agent/issue-24',
+          runnerName: 'agy',
+          status: 'running',
+        },
+      ],
+      targetSpecs: this.targetSpecs[this.targetSpecs.length - 1] || [22],
+      quota: { isPaused: false },
+    };
+  }
+
+  public getTasksSummary(): any {
+    return {
+      inProgress: [
+        {
+          issueNumber: 24,
+          title: 'feat: notifications',
+          branchName: 'agent/issue-24',
+          runnerName: 'agy',
+          status: 'running',
+        },
+      ],
+      paused: [
+        {
+          issueNumber: 25,
+          title: 'feat: quota alert',
+          branchName: 'agent/issue-25',
+          runnerName: 'claude',
+          status: 'paused_quota',
+        },
+      ],
+      queued: [
+        {
+          issueNumber: 26,
+          title: 'feat: needs info',
+          runnerName: 'agy',
+          status: 'ready',
+        },
+      ],
+    };
+  }
+
+  public getSpecsSummary(): any {
+    return {
+      targetSpecs: this.targetSpecs[this.targetSpecs.length - 1] || [22],
+      specs: [
+        {
+          number: 22,
+          title: 'Epic: Remote Control',
+          isComplete: false,
+          totalTickets: 5,
+          completedTickets: 3,
+          state: 'OPEN',
+        },
+        {
+          number: 10,
+          title: 'Epic: Core Architecture',
+          isComplete: true,
+          totalTickets: 4,
+          completedTickets: 4,
+          state: 'CLOSED',
+        },
+      ],
+    };
   }
 }
 
@@ -525,6 +640,196 @@ describe('RemoteControlManager', () => {
 
       expect(actionController.repliedNeedsInfo.length).toBe(0);
       expect(provider.editedMessages.length).toBe(0);
+    });
+  });
+
+  describe('Slash Commands & Interactive Orchestrator Controls', () => {
+    beforeEach(async () => {
+      manager = new RemoteControlManager({
+        provider,
+        repository: 'arleypadua/imagos',
+        defaultChatId: 123456,
+        actionController,
+      });
+      await manager.start();
+    });
+
+    it('/status command returns global daemon health, active worker count, git branches, and target specs', async () => {
+      await provider.triggerCommand('status', [], 123456);
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.options?.chatId).toBe(123456);
+      expect(msg.text).toContain('[arleypadua/imagos] ⚡ *Imagos Daemon Status*');
+      expect(msg.text).toContain('• *Health*: 🟢 Running (Dispatching Active)');
+      expect(msg.text).toContain('• *Active Workers*: 1 / 2');
+      expect(msg.text).toContain('• *Active Branches*:');
+      expect(msg.text).toContain('  - #24 (agy): `agent/issue-24`');
+      expect(msg.text).toContain('• *Target Specs*: #22');
+      expect(msg.text).toContain('• *Quota*: ✅ Available');
+    });
+
+    it('/tasks command lists in-progress, paused, and queued tasks with inline pause/resume buttons', async () => {
+      await provider.triggerCommand('tasks', [], 123456);
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.text).toContain('[arleypadua/imagos] 📋 *Task Execution Backlog*');
+      expect(msg.text).toContain('▶️ *In-Progress Tasks*:');
+      expect(msg.text).toContain('• *#24* - *feat: notifications*');
+      expect(msg.text).toContain('⏸️ *Paused Tasks*:');
+      expect(msg.text).toContain('• *#25* - *feat: quota alert*');
+      expect(msg.text).toContain('⏳ *Queued Tasks*:');
+      expect(msg.text).toContain('• *#26* - feat: needs info');
+
+      const actions = msg.options?.actions;
+      expect(actions).toBeDefined();
+      expect(actions!.length).toBe(2);
+      expect(actions![0][0].label).toBe('⏸️ Pause #24');
+      expect(actions![0][0].payload).toBe('v1:t:pause:24');
+      expect(actions![1][0].label).toBe('▶️ Resume #25');
+      expect(actions![1][0].payload).toBe('v1:t:resume:25');
+    });
+
+    it('/pause without arguments pauses global task dispatching', async () => {
+      expect(actionController.isDispatchingPaused).toBe(false);
+
+      await provider.triggerCommand('pause', [], 123456);
+
+      expect(actionController.isDispatchingPaused).toBe(true);
+      expect(provider.sentMessages.length).toBe(1);
+      expect(provider.sentMessages[0].text).toContain('[arleypadua/imagos] ⏸️ *Task Dispatching Paused*');
+    });
+
+    it('/resume without arguments resumes global task dispatching', async () => {
+      actionController.isDispatchingPaused = true;
+
+      await provider.triggerCommand('resume', [], 123456);
+
+      expect(actionController.isDispatchingPaused).toBe(false);
+      expect(provider.sentMessages.length).toBe(1);
+      expect(provider.sentMessages[0].text).toContain('[arleypadua/imagos] ▶️ *Task Dispatching Resumed*');
+    });
+
+    it('/pause <issueNumber> pauses individual worker', async () => {
+      await provider.triggerCommand('pause', ['24'], 123456);
+
+      expect(actionController.pausedTasks).toEqual([24]);
+      expect(provider.sentMessages.length).toBe(1);
+      expect(provider.sentMessages[0].text).toContain('[arleypadua/imagos] ⏸️ Paused worker for Issue #24');
+    });
+
+    it('/resume <issueNumber> resumes individual worker', async () => {
+      await provider.triggerCommand('resume', ['25'], 123456);
+
+      expect(actionController.resumedTasks).toEqual([25]);
+      expect(provider.sentMessages.length).toBe(1);
+      expect(provider.sentMessages[0].text).toContain('[arleypadua/imagos] ▶️ Resumed worker for Issue #25');
+    });
+
+    it('/specs without arguments lists parent specs and current scope with action buttons', async () => {
+      await provider.triggerCommand('specs', [], 123456);
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.text).toContain('[arleypadua/imagos] 🎯 *Parent Specifications*');
+      expect(msg.text).toContain('*Current Target Scope*: #22');
+      expect(msg.text).toContain('• 🏗️ *#22* - Epic: Remote Control (3/5 tickets)');
+      expect(msg.text).toContain('• ✅ *#10* - Epic: Core Architecture (4/4 tickets)');
+
+      const actions = msg.options?.actions;
+      expect(actions).toBeDefined();
+      expect(actions!.length).toBe(3);
+      expect(actions![0][0].label).toBe('🎯 Scope to #22');
+      expect(actions![0][0].payload).toBe('v1:s:set:22');
+      expect(actions![1][0].label).toBe('🎯 Scope to #10');
+      expect(actions![1][0].payload).toBe('v1:s:set:10');
+      expect(actions![2][0].label).toBe('🌐 All Specs (Unscoped)');
+      expect(actions![2][0].payload).toBe('v1:s:all');
+    });
+
+    it('/specs <id> and /specs all switches target spec scopes remotely', async () => {
+      // 1. Switch to specific spec #22
+      await provider.triggerCommand('specs', ['22'], 123456);
+      expect(actionController.targetSpecs).toEqual([[22]]);
+      expect(provider.sentMessages.length).toBe(1);
+      expect(provider.sentMessages[0].text).toContain('Scoped to Spec(s): #22');
+
+      // 2. Switch to multiple specs #22, #10
+      await provider.triggerCommand('specs', ['22,', '10'], 123456);
+      expect(actionController.targetSpecs).toEqual([[22], [22, 10]]);
+      expect(provider.sentMessages.length).toBe(2);
+      expect(provider.sentMessages[1].text).toContain('Scoped to Spec(s): #22, #10');
+
+      // 3. Switch to all specs
+      await provider.triggerCommand('specs', ['all'], 123456);
+      expect(actionController.targetSpecs).toEqual([[22], [22, 10], []]);
+      expect(provider.sentMessages.length).toBe(3);
+      expect(provider.sentMessages[2].text).toContain('Scoped to all unblocked tasks (all specs)');
+    });
+
+    it('/help command returns available commands and whitelist security status', async () => {
+      await provider.triggerCommand('help', [], 123456);
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.text).toContain('[arleypadua/imagos] 📖 *Imagos Remote Bot Help*');
+      expect(msg.text).toContain('• `/status`');
+      expect(msg.text).toContain('• `/tasks`');
+      expect(msg.text).toContain('• `/pause [issue]`');
+      expect(msg.text).toContain('• `/resume [issue]`');
+      expect(msg.text).toContain('• `/specs [numbers|all]`');
+      expect(msg.text).toContain('• `/help`');
+      expect(msg.text).toContain('🔒 *Security Status*:');
+      expect(msg.text).toContain('• *Authorization*: Authorized ✅');
+      expect(msg.text).toContain('• *Whitelist*: Enabled (2 allowed users)');
+      expect(msg.text).toContain('• *Telegram User ID*: `123456`');
+    });
+
+    it('handles interactive task button clicks (v1:t:pause / v1:t:resume) and edits message inline', async () => {
+      // Tap pause button on task #24
+      await provider.triggerAction('v1:t:pause:24', 123456, {
+        messageId: 5,
+        chatId: 123456,
+      });
+
+      expect(actionController.pausedTasks).toEqual([24]);
+      expect(provider.editedMessages.length).toBe(1);
+      expect(provider.editedMessages[0].messageId).toBe(5);
+      expect(provider.editedMessages[0].text).toContain('Task Execution Backlog');
+
+      // Tap resume button on task #25
+      await provider.triggerAction('v1:t:resume:25', 123456, {
+        messageId: 5,
+        chatId: 123456,
+      });
+
+      expect(actionController.resumedTasks).toEqual([25]);
+      expect(provider.editedMessages.length).toBe(2);
+      expect(provider.editedMessages[1].messageId).toBe(5);
+    });
+
+    it('handles interactive spec button clicks (v1:s:set / v1:s:all) and edits message inline', async () => {
+      // Tap scope to spec #22
+      await provider.triggerAction('v1:s:set:22', 123456, {
+        messageId: 8,
+        chatId: 123456,
+      });
+
+      expect(actionController.targetSpecs).toEqual([[22]]);
+      expect(provider.editedMessages.length).toBe(1);
+      expect(provider.editedMessages[0].messageId).toBe(8);
+      expect(provider.editedMessages[0].text).toContain('Parent Specifications');
+
+      // Tap all specs button
+      await provider.triggerAction('v1:s:all', 123456, {
+        messageId: 8,
+        chatId: 123456,
+      });
+
+      expect(actionController.targetSpecs).toEqual([[22], []]);
+      expect(provider.editedMessages.length).toBe(2);
+      expect(provider.editedMessages[1].messageId).toBe(8);
     });
   });
 });

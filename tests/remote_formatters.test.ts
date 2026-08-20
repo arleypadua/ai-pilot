@@ -13,6 +13,16 @@ import {
   buildQuotaResumeCallbackData,
   parseQuotaActionPayload,
   parseQuestionChoices,
+  formatStatus,
+  formatTasks,
+  formatSpecs,
+  formatHelp,
+  formatDispatchPaused,
+  formatDispatchResumed,
+  formatSpecsUpdated,
+  formatTaskActionResponse,
+  parseTaskActionPayload,
+  parseSpecActionPayload,
 } from '../src/remote/formatters.js';
 
 describe('Remote Message Formatters', () => {
@@ -292,6 +302,180 @@ describe('Remote Message Formatters', () => {
       expect(parseQuotaActionPayload('invalid_data')).toBeNull();
       expect(parseQuotaActionPayload('')).toBeNull();
       expect(parseQuotaActionPayload(null as any)).toBeNull();
+    });
+  });
+
+  describe('formatStatus', () => {
+    it('formats running status with active workers, git branches, and target specs', () => {
+      const msg = formatStatus('owner/repo', {
+        daemonStatus: 'running',
+        activeWorkerCount: 2,
+        maxConcurrency: 3,
+        activeWorkers: [
+          { issueNumber: 24, title: 'feat: notifications', branchName: 'agent/issue-24', status: 'running', runnerName: 'agy' },
+          { issueNumber: 25, title: 'feat: quota alert', branchName: 'agent/issue-25', status: 'running', runnerName: 'claude' },
+        ],
+        targetSpecs: [22],
+        quota: { isPaused: false },
+      });
+
+      expect(msg).toContain('[owner/repo] ⚡ *Imagos Daemon Status*');
+      expect(msg).toContain('• *Health*: 🟢 Running (Dispatching Active)');
+      expect(msg).toContain('• *Active Workers*: 2 / 3');
+      expect(msg).toContain('• *Active Branches*:');
+      expect(msg).toContain('  - #24 (agy): `agent/issue-24`');
+      expect(msg).toContain('  - #25 (claude): `agent/issue-25`');
+      expect(msg).toContain('• *Target Specs*: #22');
+      expect(msg).toContain('• *Quota*: ✅ Available');
+    });
+
+    it('formats paused quota and paused dispatching status', () => {
+      const pausedQuotaMsg = formatStatus('owner/repo', {
+        daemonStatus: 'paused_quota',
+        quota: { isPaused: true, resetAt: new Date('2026-08-20T20:00:00Z'), pausedRunner: 'claude' },
+      });
+      expect(pausedQuotaMsg).toContain('• *Health*: ⏸️ Paused (5h Quota Limit)');
+      expect(pausedQuotaMsg).toContain('• *Quota*: ⏳ Paused until');
+
+      const pausedDispatchMsg = formatStatus('owner/repo', {
+        daemonStatus: 'idle',
+        isDispatchingPaused: true,
+      });
+      expect(pausedDispatchMsg).toContain('• *Health*: ⏸️ Paused (Dispatching Disabled)');
+
+      const idleMsg = formatStatus('owner/repo', {
+        daemonStatus: 'idle',
+      });
+      expect(idleMsg).toContain('• *Health*: ⚪ Idle');
+      expect(idleMsg).toContain('• *Active Branches*: None');
+      expect(idleMsg).toContain('• *Target Specs*: All / Unscoped');
+    });
+  });
+
+  describe('formatTasks', () => {
+    it('formats in-progress, paused, and queued tasks with inline buttons', () => {
+      const { text, actions } = formatTasks('owner/repo', {
+        inProgress: [
+          { issueNumber: 24, title: 'feat: notifications', branchName: 'agent/issue-24', runnerName: 'agy', status: 'running' },
+        ],
+        paused: [
+          { issueNumber: 25, title: 'feat: quota alert', branchName: 'agent/issue-25', runnerName: 'claude', status: 'paused_quota' },
+        ],
+        queued: [
+          { issueNumber: 26, title: 'feat: needs-info', runnerName: 'agy', status: 'ready' },
+        ],
+      });
+
+      expect(text).toContain('[owner/repo] 📋 *Task Execution Backlog*');
+      expect(text).toContain('▶️ *In-Progress Tasks*:');
+      expect(text).toContain('• *#24* - *feat: notifications*');
+      expect(text).toContain('⏸️ *Paused Tasks*:');
+      expect(text).toContain('• *#25* - *feat: quota alert*');
+      expect(text).toContain('⏳ *Queued Tasks*:');
+      expect(text).toContain('• *#26* - feat: needs-info');
+
+      // Actions: 1 pause button for #24, 1 resume button for #25
+      expect(actions.length).toBe(2);
+      expect(actions[0][0].label).toBe('⏸️ Pause #24');
+      expect(actions[0][0].payload).toBe('v1:t:pause:24');
+      expect(actions[1][0].label).toBe('▶️ Resume #25');
+      expect(actions[1][0].payload).toBe('v1:t:resume:25');
+    });
+
+    it('formats empty task list', () => {
+      const { text, actions } = formatTasks('owner/repo', {
+        inProgress: [],
+        paused: [],
+        queued: [],
+      });
+
+      expect(text).toContain('No active, paused, or queued tasks.');
+      expect(actions.length).toBe(0);
+    });
+  });
+
+  describe('formatSpecs', () => {
+    it('formats parent specs with progress and action buttons', () => {
+      const { text, actions } = formatSpecs('owner/repo', {
+        targetSpecs: [22],
+        specs: [
+          { number: 22, title: 'Epic: Remote Control', isComplete: false, totalTickets: 5, completedTickets: 3, state: 'OPEN' },
+          { number: 10, title: 'Epic: Core Pipeline', isComplete: true, totalTickets: 4, completedTickets: 4, state: 'CLOSED' },
+        ],
+      });
+
+      expect(text).toContain('[owner/repo] 🎯 *Parent Specifications*');
+      expect(text).toContain('*Current Target Scope*: #22');
+      expect(text).toContain('• 🏗️ *#22* - Epic: Remote Control (3/5 tickets)');
+      expect(text).toContain('• ✅ *#10* - Epic: Core Pipeline (4/4 tickets)');
+
+      // Actions: 1 button for #22, 1 button for #10, 1 button for All
+      expect(actions.length).toBe(3);
+      expect(actions[0][0].label).toBe('🎯 Scope to #22');
+      expect(actions[0][0].payload).toBe('v1:s:set:22');
+      expect(actions[1][0].label).toBe('🎯 Scope to #10');
+      expect(actions[1][0].payload).toBe('v1:s:set:10');
+      expect(actions[2][0].label).toBe('🌐 All Specs (Unscoped)');
+      expect(actions[2][0].payload).toBe('v1:s:all');
+    });
+  });
+
+  describe('formatHelp', () => {
+    it('formats available slash commands and security whitelist status', () => {
+      const msg = formatHelp('owner/repo', {
+        userId: 123456,
+        isAuthorized: true,
+        whitelistStatus: 'Enabled (2 allowed users)',
+        allowedUserCount: 2,
+      });
+
+      expect(msg).toContain('[owner/repo] 📖 *Imagos Remote Bot Help*');
+      expect(msg).toContain('• `/status`');
+      expect(msg).toContain('• `/tasks`');
+      expect(msg).toContain('• `/pause [issue]`');
+      expect(msg).toContain('• `/resume [issue]`');
+      expect(msg).toContain('• `/specs [numbers|all]`');
+      expect(msg).toContain('• `/help`');
+      expect(msg).toContain('🔒 *Security Status*:');
+      expect(msg).toContain('• *Authorization*: Authorized ✅');
+      expect(msg).toContain('• *Whitelist*: Enabled (2 allowed users)');
+      expect(msg).toContain('• *Telegram User ID*: `123456`');
+    });
+  });
+
+  describe('formatDispatchPaused & formatDispatchResumed & formatSpecsUpdated & formatTaskActionResponse', () => {
+    it('formats dispatching state notifications', () => {
+      expect(formatDispatchPaused('owner/repo')).toContain('⏸️ *Task Dispatching Paused*');
+      expect(formatDispatchResumed('owner/repo')).toContain('▶️ *Task Dispatching Resumed*');
+    });
+
+    it('formats target specs updated notification', () => {
+      expect(formatSpecsUpdated('owner/repo', [22, 25])).toContain('Scoped to Spec(s): #22, #25');
+      expect(formatSpecsUpdated('owner/repo', [])).toContain('Scoped to all unblocked tasks (all specs).');
+    });
+
+    it('formats worker pause/resume action response', () => {
+      expect(formatTaskActionResponse('owner/repo', 'pause', 24, { success: true, message: '' })).toContain('⏸️ Paused worker for Issue #24');
+      expect(formatTaskActionResponse('owner/repo', 'resume', 24, { success: true, message: '' })).toContain('▶️ Resumed worker for Issue #24');
+      expect(formatTaskActionResponse('owner/repo', 'pause', 24, { success: false, message: 'No runner' })).toContain('⚠️ Failed to pause worker for Issue #24: No runner');
+    });
+  });
+
+  describe('parseTaskActionPayload & parseSpecActionPayload', () => {
+    it('parses task action callback payloads', () => {
+      expect(parseTaskActionPayload('v1:t:pause:24')).toEqual({ action: 'pause', issueNumber: 24 });
+      expect(parseTaskActionPayload('v1:t:p:24')).toEqual({ action: 'pause', issueNumber: 24 });
+      expect(parseTaskActionPayload('v1:t:resume:24')).toEqual({ action: 'resume', issueNumber: 24 });
+      expect(parseTaskActionPayload('v1:t:r:24')).toEqual({ action: 'resume', issueNumber: 24 });
+      expect(parseTaskActionPayload('v1:t:invalid:24')).toBeNull();
+      expect(parseTaskActionPayload('v1:other')).toBeNull();
+    });
+
+    it('parses spec action callback payloads', () => {
+      expect(parseSpecActionPayload('v1:s:set:22')).toEqual({ action: 'set', specNumbers: [22] });
+      expect(parseSpecActionPayload('v1:s:all')).toEqual({ action: 'all', specNumbers: [] });
+      expect(parseSpecActionPayload('v1:s:invalid')).toBeNull();
+      expect(parseSpecActionPayload('v1:other')).toBeNull();
     });
   });
 });

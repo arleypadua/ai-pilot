@@ -5,6 +5,11 @@ import type {
   NeedsInfoNotificationPayload,
   QuotaPausedNotificationPayload,
   QuotaResumedNotificationPayload,
+  StatusSummary,
+  TasksSummary,
+  SpecsSummary,
+  SecurityStatusInfo,
+  InteractiveAction,
 } from './types.js';
 
 /**
@@ -295,6 +300,300 @@ export function parseQuotaActionPayload(
       return { action: 'resume', runner: undefined };
     }
     return { action: 'resume', runner };
+  }
+  return null;
+}
+
+/**
+ * Formats daemon status summary for /status command.
+ */
+export function formatStatus(repository: string | undefined, summary: Partial<StatusSummary> & Record<string, any>): string {
+  const repoTag = formatRepoTag(repository);
+  const lines = [`${repoTag}⚡ *Imagos Daemon Status*`, ''];
+
+  // 1. Health Status
+  let healthText = '🟢 Running (Dispatching Active)';
+  if (summary.quota?.isPaused || summary.daemonStatus === 'paused_quota' || summary.status === 'paused_quota') {
+    healthText = '⏸️ Paused (5h Quota Limit)';
+  } else if (summary.isDispatchingPaused || summary.isSessionStarted === false) {
+    healthText = '⏸️ Paused (Dispatching Disabled)';
+  } else if (summary.daemonStatus === 'idle' || summary.status === 'idle') {
+    healthText = '⚪ Idle';
+  }
+  lines.push(`• *Health*: ${healthText}`);
+
+  // 2. Active Worker Count & Max Concurrency
+  const activeCount = summary.activeWorkerCount ?? summary.activeWorkers?.length ?? (summary.workers?.length || 0);
+  const maxConcurrency = summary.maxConcurrency ?? 2;
+  lines.push(`• *Active Workers*: ${activeCount} / ${maxConcurrency}`);
+
+  // 3. Current Git Branches / Worktrees
+  const activeWorkers = summary.activeWorkers || summary.workers || [];
+  const activeWorktrees = summary.activeWorktrees || [];
+
+  if (activeWorkers.length > 0) {
+    lines.push(`• *Active Branches*:`);
+    for (const w of activeWorkers) {
+      const runnerStr = w.runnerName ? ` (${w.runnerName})` : '';
+      lines.push(`  - #${w.issueNumber}${runnerStr}: \`${w.branchName || 'agent/issue-' + w.issueNumber}\``);
+    }
+  } else if (activeWorktrees.length > 0) {
+    lines.push(`• *Active Branches*:`);
+    for (const wt of activeWorktrees) {
+      const issueStr = wt.issueNumber ? `#${wt.issueNumber}: ` : '';
+      lines.push(`  - ${issueStr}\`${wt.branch}\``);
+    }
+  } else {
+    lines.push(`• *Active Branches*: None`);
+  }
+
+  // 4. Target Specs
+  const targetSpecs: number[] = summary.targetSpecs || [];
+  if (targetSpecs.length > 0) {
+    lines.push(`• *Target Specs*: ${targetSpecs.map((s) => `#${s}`).join(', ')}`);
+  } else {
+    lines.push(`• *Target Specs*: All / Unscoped (any unblocked task)`);
+  }
+
+  // 5. Quota Status
+  if (summary.quota) {
+    if (summary.quota.isPaused && summary.quota.resetAt) {
+      const resetTime = new Date(summary.quota.resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const runnerStr = summary.quota.pausedRunner ? ` [${summary.quota.pausedRunner}]` : '';
+      lines.push(`• *Quota*: ⏳ Paused until ${resetTime}${runnerStr}`);
+    } else {
+      lines.push(`• *Quota*: ✅ Available`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Formats task list for /tasks command, returning formatted text and inline action buttons.
+ */
+export function formatTasks(
+  repository: string | undefined,
+  tasksData: TasksSummary
+): { text: string; actions: InteractiveAction[][] } {
+  const repoTag = formatRepoTag(repository);
+  const lines = [`${repoTag}📋 *Task Execution Backlog*`];
+  const actions: InteractiveAction[][] = [];
+
+  let hasAnyTasks = false;
+
+  // In-Progress Tasks
+  if (tasksData.inProgress && tasksData.inProgress.length > 0) {
+    hasAnyTasks = true;
+    lines.push('', '▶️ *In-Progress Tasks*:');
+    for (const t of tasksData.inProgress) {
+      const runnerStr = t.runnerName ? ` | Runner: \`${t.runnerName}\`` : '';
+      lines.push(`• *#${t.issueNumber}* - *${escapeMarkdown(t.title)}*`);
+      lines.push(`  └ Branch: \`${t.branchName || 'agent/issue-' + t.issueNumber}\`${runnerStr}`);
+      actions.push([
+        {
+          id: `t_pause_${t.issueNumber}`,
+          label: `⏸️ Pause #${t.issueNumber}`,
+          payload: `v1:t:pause:${t.issueNumber}`,
+        },
+      ]);
+    }
+  }
+
+  // Paused Tasks
+  if (tasksData.paused && tasksData.paused.length > 0) {
+    hasAnyTasks = true;
+    lines.push('', '⏸️ *Paused Tasks*:');
+    for (const t of tasksData.paused) {
+      const runnerStr = t.runnerName ? ` | Runner: \`${t.runnerName}\`` : '';
+      lines.push(`• *#${t.issueNumber}* - *${escapeMarkdown(t.title)}*`);
+      lines.push(`  └ Branch: \`${t.branchName || 'agent/issue-' + t.issueNumber}\`${runnerStr}`);
+      actions.push([
+        {
+          id: `t_resume_${t.issueNumber}`,
+          label: `▶️ Resume #${t.issueNumber}`,
+          payload: `v1:t:resume:${t.issueNumber}`,
+        },
+      ]);
+    }
+  }
+
+  // Queued Tasks
+  if (tasksData.queued && tasksData.queued.length > 0) {
+    hasAnyTasks = true;
+    lines.push('', '⏳ *Queued Tasks*:');
+    for (const t of tasksData.queued) {
+      const runnerStr = t.runnerName ? ` (\`${t.runnerName}\`)` : '';
+      lines.push(`• *#${t.issueNumber}* - ${escapeMarkdown(t.title)}${runnerStr}`);
+    }
+  }
+
+  if (!hasAnyTasks) {
+    lines.push('', 'No active, paused, or queued tasks.');
+  }
+
+  return { text: lines.join('\n'), actions };
+}
+
+/**
+ * Formats parent specifications list for /specs command.
+ */
+export function formatSpecs(
+  repository: string | undefined,
+  specsData: SpecsSummary
+): { text: string; actions: InteractiveAction[][] } {
+  const repoTag = formatRepoTag(repository);
+  const lines = [`${repoTag}🎯 *Parent Specifications*`, ''];
+
+  const targetSpecs = specsData.targetSpecs || [];
+  const scopeStr = targetSpecs.length > 0 ? targetSpecs.map((s) => `#${s}`).join(', ') : 'All / Unscoped';
+  lines.push(`*Current Target Scope*: ${scopeStr}`);
+
+  const actions: InteractiveAction[][] = [];
+
+  if (specsData.specs && specsData.specs.length > 0) {
+    lines.push('', '*Available Specifications*:');
+    for (const s of specsData.specs) {
+      const statusIcon = s.isComplete || s.state === 'CLOSED' ? '✅' : '🏗️';
+      const progress = `(${s.completedTickets}/${s.totalTickets} tickets)`;
+      lines.push(`• ${statusIcon} *#${s.number}* - ${escapeMarkdown(s.title)} ${progress}`);
+
+      actions.push([
+        {
+          id: `s_set_${s.number}`,
+          label: `🎯 Scope to #${s.number}`,
+          payload: `v1:s:set:${s.number}`,
+        },
+      ]);
+    }
+  } else {
+    lines.push('', 'No parent specifications found in backlog.');
+  }
+
+  // Add button to select all / unscoped
+  actions.push([
+    {
+      id: 's_all',
+      label: '🌐 All Specs (Unscoped)',
+      payload: 'v1:s:all',
+    },
+  ]);
+
+  lines.push('', '💡 *Tip*: Use `/specs <number>` (e.g. `/specs 22`) or `/specs all` to switch target scopes remotely.');
+
+  return { text: lines.join('\n'), actions };
+}
+
+/**
+ * Formats command reference and security status for /help command.
+ */
+export function formatHelp(repository: string | undefined, securityInfo: SecurityStatusInfo): string {
+  const repoTag = formatRepoTag(repository);
+  const lines = [
+    `${repoTag}📖 *Imagos Remote Bot Help*`,
+    '',
+    '*Available Slash Commands*:',
+    '• `/status` - View daemon health, active workers, git branches, and target specs',
+    '• `/tasks` - View in-progress, paused, and queued tasks with pause/resume controls',
+    '• `/pause [issue]` - Pause global task dispatching or pause a specific worker',
+    '• `/resume [issue]` - Resume global task dispatching or resume a specific worker',
+    '• `/specs [numbers|all]` - View or switch target parent spec scopes',
+    '• `/help` - Show this command reference and security status',
+    '',
+    '🔒 *Security Status*:',
+    `• *Authorization*: ${securityInfo.isAuthorized ? 'Authorized ✅' : 'Unauthorized ❌'}`,
+    `• *Whitelist*: ${securityInfo.whitelistStatus}`,
+    `• *Telegram User ID*: \`${securityInfo.userId}\``,
+  ];
+
+  return lines.join('\n');
+}
+
+/**
+ * Formats notification when task dispatching is paused globally.
+ */
+export function formatDispatchPaused(repository: string | undefined): string {
+  const repoTag = formatRepoTag(repository);
+  return `${repoTag}⏸️ *Task Dispatching Paused*\n\nOrchestrator task dispatching is paused. No new tasks will be dispatched.\nActive workers will continue until their current turn completes.`;
+}
+
+/**
+ * Formats notification when task dispatching is resumed globally.
+ */
+export function formatDispatchResumed(repository: string | undefined): string {
+  const repoTag = formatRepoTag(repository);
+  return `${repoTag}▶️ *Task Dispatching Resumed*\n\nOrchestrator task dispatching is active. Ready tasks will be dispatched up to concurrency limits.`;
+}
+
+/**
+ * Formats notification when target specs scope is updated.
+ */
+export function formatSpecsUpdated(repository: string | undefined, targetSpecs: number[]): string {
+  const repoTag = formatRepoTag(repository);
+  if (targetSpecs.length > 0) {
+    return `${repoTag}🎯 *Target Scope Updated*\n\nScoped to Spec(s): ${targetSpecs.map((s) => `#${s}`).join(', ')}`;
+  }
+  return `${repoTag}🎯 *Target Scope Updated*\n\nScoped to all unblocked tasks (all specs).`;
+}
+
+/**
+ * Formats response for individual worker pause/resume action.
+ */
+export function formatTaskActionResponse(
+  repository: string | undefined,
+  action: 'pause' | 'resume',
+  issueNumber: number,
+  result: { success: boolean; message: string }
+): string {
+  const repoTag = formatRepoTag(repository);
+  if (result.success) {
+    const actionStr = action === 'pause' ? '⏸️ Paused' : '▶️ Resumed';
+    return `${repoTag}${actionStr} worker for Issue #${issueNumber}.`;
+  }
+  return `${repoTag}⚠️ Failed to ${action} worker for Issue #${issueNumber}: ${result.message}`;
+}
+
+/**
+ * Parses callback data for task actions (e.g. `v1:t:pause:24` or `v1:t:resume:24`).
+ */
+export function parseTaskActionPayload(
+  payload: string
+): { action: 'pause' | 'resume'; issueNumber: number } | null {
+  if (!payload || typeof payload !== 'string' || !payload.startsWith('v1:t:')) {
+    return null;
+  }
+  const parts = payload.split(':');
+  if (parts.length >= 4) {
+    const act = parts[2];
+    const num = parseInt(parts[3], 10);
+    if (!isNaN(num) && (act === 'pause' || act === 'p')) {
+      return { action: 'pause', issueNumber: num };
+    }
+    if (!isNaN(num) && (act === 'resume' || act === 'r')) {
+      return { action: 'resume', issueNumber: num };
+    }
+  }
+  return null;
+}
+
+/**
+ * Parses callback data for spec actions (e.g. `v1:s:set:22` or `v1:s:all`).
+ */
+export function parseSpecActionPayload(
+  payload: string
+): { action: 'set' | 'all'; specNumbers: number[] } | null {
+  if (!payload || typeof payload !== 'string' || !payload.startsWith('v1:s:')) {
+    return null;
+  }
+  const parts = payload.split(':');
+  if (parts[2] === 'all') {
+    return { action: 'all', specNumbers: [] };
+  }
+  if (parts[2] === 'set' && parts[3]) {
+    const num = parseInt(parts[3], 10);
+    if (!isNaN(num)) {
+      return { action: 'set', specNumbers: [num] };
+    }
   }
   return null;
 }

@@ -12,6 +12,9 @@ import type {
   NeedsInfoNotificationPayload,
   QuotaPausedNotificationPayload,
   QuotaResumedNotificationPayload,
+  TasksSummary,
+  SpecsSummary,
+  SecurityStatusInfo,
 } from './types.js';
 import type { TelegramNotificationsConfig } from '../types/index.js';
 import { AgentEventBus, type AgentEvent } from '../events/bus.js';
@@ -28,6 +31,16 @@ import {
   buildQuotaResumeCallbackData,
   parseQuotaActionPayload,
   parseQuestionChoices,
+  formatStatus,
+  formatTasks,
+  formatSpecs,
+  formatHelp,
+  formatDispatchPaused,
+  formatDispatchResumed,
+  formatSpecsUpdated,
+  formatTaskActionResponse,
+  parseTaskActionPayload,
+  parseSpecActionPayload,
 } from './formatters.js';
 import type { QuotaMonitor } from '../quota/monitor.js';
 
@@ -141,9 +154,40 @@ export class RemoteControlManager {
       await this.handleNeedsInfoAction(payload, userId);
     });
 
+    // Register task action handler with provider (pause / resume individual worker)
+    this.provider.onAction('v1:t', async (_action, payload, userId, context) => {
+      await this.handleTaskAction(payload, userId, context);
+    });
+
+    // Register spec target action handler with provider
+    this.provider.onAction('v1:s', async (_action, payload, userId, context) => {
+      await this.handleSpecAction(payload, userId, context);
+    });
+
     if (this.provider.onTextReply) {
       this.provider.onTextReply(async (replyToMessageId, text, userId) => {
         await this.handleTextReply(replyToMessageId, text, userId);
+      });
+    }
+
+    if (this.provider.onCommand) {
+      this.provider.onCommand('status', async (args, userId, context) => {
+        await this.handleStatusCommand(args, userId, context);
+      });
+      this.provider.onCommand('tasks', async (args, userId, context) => {
+        await this.handleTasksCommand(args, userId, context);
+      });
+      this.provider.onCommand('pause', async (args, userId, context) => {
+        await this.handlePauseCommand(args, userId, context);
+      });
+      this.provider.onCommand('resume', async (args, userId, context) => {
+        await this.handleResumeCommand(args, userId, context);
+      });
+      this.provider.onCommand('specs', async (args, userId, context) => {
+        await this.handleSpecsCommand(args, userId, context);
+      });
+      this.provider.onCommand('help', async (args, userId, context) => {
+        await this.handleHelpCommand(args, userId, context);
       });
     }
   }
@@ -568,6 +612,282 @@ export class RemoteControlManager {
     }
     this.lastResumedEvent = { runner: payload.runnerName, timestamp: now };
     await this.sendQuotaResumed(payload);
+  }
+
+  public async handleStatusCommand(
+    _args: string[],
+    _userId: number,
+    context?: ActionContext
+  ): Promise<void> {
+    const summary = (this.actionController?.getStatusSummary() || {}) as any;
+    const text = formatStatus(this.repository, summary);
+    await this.provider.sendMessage(text, {
+      chatId: context?.chatId ?? this.defaultChatId,
+      parseMode: 'Markdown',
+    });
+  }
+
+  public async handleTasksCommand(
+    _args: string[],
+    _userId: number,
+    context?: ActionContext
+  ): Promise<void> {
+    let tasksData: TasksSummary;
+    if (this.actionController?.getTasksSummary) {
+      tasksData = this.actionController.getTasksSummary();
+    } else {
+      const summary = (this.actionController?.getStatusSummary() || {}) as any;
+      const activeWorkers = summary.activeWorkers || summary.workers || [];
+      const inProgress = activeWorkers.filter((w: any) => w.status === 'running');
+      const paused = activeWorkers.filter((w: any) => w.status === 'paused_quota' || w.status === 'paused');
+      tasksData = {
+        inProgress,
+        paused,
+        queued: [],
+      };
+    }
+
+    const { text, actions } = formatTasks(this.repository, tasksData);
+    await this.provider.sendMessage(text, {
+      chatId: context?.chatId ?? this.defaultChatId,
+      parseMode: 'Markdown',
+      actions: actions.length > 0 ? actions : undefined,
+    });
+  }
+
+  public async handlePauseCommand(
+    args: string[],
+    _userId: number,
+    context?: ActionContext
+  ): Promise<void> {
+    if (args.length > 0) {
+      const issueNum = parseInt(args[0].replace(/^#/, ''), 10);
+      if (!isNaN(issueNum)) {
+        let result = { success: true, message: `Paused worker for Issue #${issueNum}` };
+        if (this.actionController?.pauseTask) {
+          const res = await this.actionController.pauseTask(issueNum);
+          if (res && typeof res === 'object') {
+            result = res;
+          }
+        }
+        const text = formatTaskActionResponse(this.repository, 'pause', issueNum, result);
+        await this.provider.sendMessage(text, {
+          chatId: context?.chatId ?? this.defaultChatId,
+          parseMode: 'Markdown',
+        });
+        return;
+      }
+    }
+
+    if (this.actionController?.pauseDispatching) {
+      this.actionController.pauseDispatching();
+    }
+    const text = formatDispatchPaused(this.repository);
+    await this.provider.sendMessage(text, {
+      chatId: context?.chatId ?? this.defaultChatId,
+      parseMode: 'Markdown',
+    });
+  }
+
+  public async handleResumeCommand(
+    args: string[],
+    _userId: number,
+    context?: ActionContext
+  ): Promise<void> {
+    if (args.length > 0) {
+      const issueNum = parseInt(args[0].replace(/^#/, ''), 10);
+      if (!isNaN(issueNum)) {
+        let result = { success: true, message: `Resumed worker for Issue #${issueNum}` };
+        if (this.actionController?.resumeTask) {
+          const res = await this.actionController.resumeTask(issueNum);
+          if (res && typeof res === 'object') {
+            result = res;
+          }
+        }
+        const text = formatTaskActionResponse(this.repository, 'resume', issueNum, result);
+        await this.provider.sendMessage(text, {
+          chatId: context?.chatId ?? this.defaultChatId,
+          parseMode: 'Markdown',
+        });
+        return;
+      }
+    }
+
+    if (this.actionController?.resumeDispatching) {
+      this.actionController.resumeDispatching();
+    }
+    const text = formatDispatchResumed(this.repository);
+    await this.provider.sendMessage(text, {
+      chatId: context?.chatId ?? this.defaultChatId,
+      parseMode: 'Markdown',
+    });
+  }
+
+  public async handleSpecsCommand(
+    args: string[],
+    _userId: number,
+    context?: ActionContext
+  ): Promise<void> {
+    if (args.length > 0) {
+      const firstArg = args[0].toLowerCase();
+      if (['all', 'clear', 'reset', '0', 'none'].includes(firstArg)) {
+        if (this.actionController?.setTargetSpecs) {
+          this.actionController.setTargetSpecs([]);
+        }
+        const text = formatSpecsUpdated(this.repository, []);
+        await this.provider.sendMessage(text, {
+          chatId: context?.chatId ?? this.defaultChatId,
+          parseMode: 'Markdown',
+        });
+        return;
+      }
+
+      const numbers = args
+        .join(' ')
+        .split(/[\s,]+/)
+        .map((s) => parseInt(s.replace(/^#/, ''), 10))
+        .filter((n) => !isNaN(n));
+
+      if (numbers.length > 0) {
+        if (this.actionController?.setTargetSpecs) {
+          this.actionController.setTargetSpecs(numbers);
+        }
+        const text = formatSpecsUpdated(this.repository, numbers);
+        await this.provider.sendMessage(text, {
+          chatId: context?.chatId ?? this.defaultChatId,
+          parseMode: 'Markdown',
+        });
+        return;
+      }
+    }
+
+    let specsData: SpecsSummary;
+    if (this.actionController?.getSpecsSummary) {
+      specsData = this.actionController.getSpecsSummary();
+    } else {
+      const summary = (this.actionController?.getStatusSummary() || {}) as any;
+      specsData = {
+        targetSpecs: summary.targetSpecs || [],
+        specs: summary.allSpecs || [],
+      };
+    }
+
+    const { text, actions } = formatSpecs(this.repository, specsData);
+    await this.provider.sendMessage(text, {
+      chatId: context?.chatId ?? this.defaultChatId,
+      parseMode: 'Markdown',
+      actions: actions.length > 0 ? actions : undefined,
+    });
+  }
+
+  public async handleHelpCommand(
+    _args: string[],
+    userId: number,
+    context?: ActionContext
+  ): Promise<void> {
+    const allowedUserIds = this.provider.getAllowedUserIds?.();
+    const whitelistStatus =
+      allowedUserIds && allowedUserIds.length > 0
+        ? `Enabled (${allowedUserIds.length} allowed user${allowedUserIds.length === 1 ? '' : 's'})`
+        : 'Disabled (Open to all)';
+
+    const securityInfo: SecurityStatusInfo = {
+      userId,
+      isAuthorized: true,
+      whitelistStatus,
+      allowedUserCount: allowedUserIds?.length,
+    };
+
+    const text = formatHelp(this.repository, securityInfo);
+    await this.provider.sendMessage(text, {
+      chatId: context?.chatId ?? this.defaultChatId,
+      parseMode: 'Markdown',
+    });
+  }
+
+  public async handleTaskAction(
+    payload: string,
+    _userId: number,
+    context?: ActionContext
+  ): Promise<boolean> {
+    const parsed = parseTaskActionPayload(payload);
+    if (!parsed) return false;
+
+    let result = { success: true, message: `Task #${parsed.issueNumber} ${parsed.action}d` };
+    if (parsed.action === 'pause' && this.actionController?.pauseTask) {
+      const res = await this.actionController.pauseTask(parsed.issueNumber);
+      if (res && typeof res === 'object') {
+        result = res;
+      }
+    } else if (parsed.action === 'resume' && this.actionController?.resumeTask) {
+      const res = await this.actionController.resumeTask(parsed.issueNumber);
+      if (res && typeof res === 'object') {
+        result = res;
+      }
+    }
+
+    if (context?.messageId && this.actionController?.getTasksSummary) {
+      const updatedTasks = this.actionController.getTasksSummary();
+      const { text, actions } = formatTasks(this.repository, updatedTasks);
+      try {
+        await this.provider.editMessage(context.messageId, text, {
+          chatId: context.chatId ?? this.defaultChatId,
+          parseMode: 'Markdown',
+          actions: actions.length > 0 ? actions : [],
+        });
+      } catch (err: any) {
+        console.error('RemoteControlManager: failed to edit tasks message inline:', err);
+      }
+    } else {
+      const text = formatTaskActionResponse(this.repository, parsed.action, parsed.issueNumber, result);
+      await this.provider.sendMessage(text, {
+        chatId: context?.chatId ?? this.defaultChatId,
+        parseMode: 'Markdown',
+      });
+    }
+
+    return true;
+  }
+
+  public async handleSpecAction(
+    payload: string,
+    _userId: number,
+    context?: ActionContext
+  ): Promise<boolean> {
+    const parsed = parseSpecActionPayload(payload);
+    if (!parsed) return false;
+
+    if (parsed.action === 'all') {
+      if (this.actionController?.setTargetSpecs) {
+        this.actionController.setTargetSpecs([]);
+      }
+    } else if (parsed.action === 'set') {
+      if (this.actionController?.setTargetSpecs) {
+        this.actionController.setTargetSpecs(parsed.specNumbers);
+      }
+    }
+
+    if (context?.messageId && this.actionController?.getSpecsSummary) {
+      const updatedSpecs = this.actionController.getSpecsSummary();
+      const { text, actions } = formatSpecs(this.repository, updatedSpecs);
+      try {
+        await this.provider.editMessage(context.messageId, text, {
+          chatId: context.chatId ?? this.defaultChatId,
+          parseMode: 'Markdown',
+          actions: actions.length > 0 ? actions : [],
+        });
+      } catch (err: any) {
+        console.error('RemoteControlManager: failed to edit specs message inline:', err);
+      }
+    } else {
+      const updateText = formatSpecsUpdated(this.repository, parsed.specNumbers);
+      await this.provider.sendMessage(updateText, {
+        chatId: context?.chatId ?? this.defaultChatId,
+        parseMode: 'Markdown',
+      });
+    }
+
+    return true;
   }
 
   private handleAgentEvent(_event: AgentEvent): void {

@@ -317,5 +317,43 @@ describe('TelegramRemoteProvider', () => {
         userId: 111,
       });
     });
+
+    it('dispatches command with arguments and ActionContext to onCommand handler', async () => {
+      provider = new TelegramRemoteProvider({
+        bot,
+        rateLimiter,
+        allowedUserIds: [111],
+        defaultChatId: 111,
+      });
+
+      let receivedArgs: string[] = [];
+      let receivedUserId: number = 0;
+      let receivedContext: any = null;
+
+      provider.onCommand('specs', async (args, userId, context) => {
+        receivedArgs = args;
+        receivedUserId = userId;
+        receivedContext = context;
+      });
+
+      await bot.handleUpdate({
+        update_id: 7,
+        message: {
+          message_id: 70,
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: 111, type: 'private' },
+          from: { id: 111, is_bot: false, first_name: 'Owner' },
+          text: '/specs 22, 25',
+          entities: [{ type: 'bot_command', offset: 0, length: 6 }],
+        },
+      });
+
+      expect(receivedUserId).toBe(111);
+      expect(receivedArgs).toEqual(['22,', '25']);
+      expect(receivedContext).toEqual({
+        chatId: 111,
+        messageId: 70,
+      });
+    });
   });
 });
