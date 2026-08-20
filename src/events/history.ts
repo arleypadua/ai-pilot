@@ -96,6 +96,103 @@ export function loadHistoricalEvents(issueNumber: number, worktreePath?: string)
     }
   } catch {}
 
+  // 1b. Check Antigravity (agy) transcripts in ~/.gemini/antigravity-cli/brain/
+  if (events.length === 0) {
+    try {
+      const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+      if (fs.existsSync(brainDir)) {
+        const entries = fs.readdirSync(brainDir, { withFileTypes: true });
+        const dirStats: { transcriptPath: string; mtime: number }[] = [];
+
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const transcriptPath = path.join(brainDir, entry.name, '.system_generated', 'logs', 'transcript.jsonl');
+            if (fs.existsSync(transcriptPath)) {
+              try {
+                const stat = fs.statSync(transcriptPath);
+                dirStats.push({ transcriptPath, mtime: stat.mtimeMs });
+              } catch {}
+            }
+          }
+        }
+
+        dirStats.sort((a, b) => b.mtime - a.mtime);
+
+        // Strictly check if candidate transcript belongs to this issue or worktree
+        let matchedTranscript: string | undefined;
+        for (const candidate of dirStats.slice(0, 10)) {
+          try {
+            const head = fs.readFileSync(candidate.transcriptPath, 'utf8').slice(0, 10000);
+            if (
+              head.includes(`issues/${issueNumber}`) ||
+              head.includes(`issue-${issueNumber}`) ||
+              head.includes(`Issue #${issueNumber}`) ||
+              head.includes(`Closes #${issueNumber}`) ||
+              head.includes(path.basename(targetWorktree))
+            ) {
+              matchedTranscript = candidate.transcriptPath;
+              break;
+            }
+          } catch {}
+        }
+
+        if (matchedTranscript) {
+          const content = fs.readFileSync(matchedTranscript, 'utf8');
+          const lines = content.split('\n').filter(Boolean);
+          const recentLines = lines.slice(-40);
+
+          for (const line of recentLines) {
+            try {
+              const parsed = JSON.parse(line);
+              const timeStr = parsed.created_at
+                ? new Date(parsed.created_at).toLocaleTimeString()
+                : new Date().toLocaleTimeString();
+
+              if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
+                for (const tc of parsed.tool_calls) {
+                  const summary = tc.args?.toolSummary || tc.args?.toolAction || '';
+                  const cmd = tc.args?.CommandLine ? `\`${tc.args.CommandLine.slice(0, 50)}\`` : '';
+                  const target = tc.args?.TargetFile ? path.basename(tc.args.TargetFile) : '';
+                  const detail = summary || cmd || target || tc.name;
+                  events.push({
+                    id: `hist-agy-${events.length}-${Math.random().toString(36).slice(2, 6)}`,
+                    issueNumber,
+                    type: 'tool_start',
+                    timestamp: timeStr,
+                    summary: `🔧 ${tc.name}: ${detail}`,
+                    detail: tc.args,
+                  });
+                }
+              } else if (parsed.type === 'PLANNER_RESPONSE' && parsed.content) {
+                const thought = parsed.content.trim();
+                if (thought) {
+                  events.push({
+                    id: `hist-agy-${events.length}-${Math.random().toString(36).slice(2, 6)}`,
+                    issueNumber,
+                    type: 'thought',
+                    timestamp: timeStr,
+                    summary: thought.slice(0, 160),
+                  });
+                }
+              } else if (parsed.type === 'GENERIC' || (parsed.source === 'MODEL' && parsed.content)) {
+                const firstLine = (parsed.content || '').split('\n')[0] || '';
+                if (firstLine && !firstLine.startsWith('{')) {
+                  events.push({
+                    id: `hist-agy-${events.length}-${Math.random().toString(36).slice(2, 6)}`,
+                    issueNumber,
+                    type: 'tool_end',
+                    timestamp: timeStr,
+                    summary: `✓ ${firstLine.slice(0, 80)}`,
+                  });
+                }
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+  }
+
   // 2. If no JSONL events or few events found, inspect session timeline and stdout from state
   if (events.length === 0) {
     if (session.metadata?.timeline && session.metadata.timeline.length > 0) {

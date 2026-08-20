@@ -332,6 +332,19 @@ ${guidelines}
         }
       }
 
+      if (
+        /timeout waiting for response/i.test(fullOutput) ||
+        /timed?\s*out waiting/i.test(fullOutput)
+      ) {
+        return {
+          success: false,
+          status: 'TIMED_OUT',
+          isTimeout: true,
+          error: 'Execution timed out waiting for response',
+          summary: fullOutput.slice(-1000),
+        };
+      }
+
       return {
         success: true,
         status: 'COMPLETED',
@@ -361,6 +374,24 @@ ${guidelines}
             summary: 'Execution paused due to AGY quota limits.',
           };
         }
+      }
+
+      const isTimeout =
+        err.timedOut === true ||
+        /timeout waiting for response/i.test(err.message || '') ||
+        /timeout waiting for response/i.test(fullOutput) ||
+        /timed?\s*out/i.test(err.message || '') ||
+        /timed?\s*out/i.test(fullOutput) ||
+        err.code === 'ETIMEDOUT';
+
+      if (isTimeout) {
+        return {
+          success: false,
+          status: 'TIMED_OUT',
+          isTimeout: true,
+          error: err.message || String(err),
+          summary: fullOutput.slice(-1000) || 'Execution timed out waiting for response',
+        };
       }
 
       return {
@@ -406,14 +437,15 @@ ${guidelines}
         if (dirStats.length === 0) return undefined;
         dirStats.sort((a, b) => b.mtime - a.mtime);
 
-        // Check if top candidate transcript belongs to this issue or worktree
-        for (const candidate of dirStats.slice(0, 5)) {
+        // Check if candidate transcript belongs to this issue or worktree
+        for (const candidate of dirStats.slice(0, 10)) {
           try {
-            const head = fs.readFileSync(candidate.transcriptPath, 'utf8').slice(0, 3000);
+            const head = fs.readFileSync(candidate.transcriptPath, 'utf8').slice(0, 10000);
             if (
               head.includes(`issues/${issueNumber}`) ||
               head.includes(`issue-${issueNumber}`) ||
               head.includes(`Issue #${issueNumber}`) ||
+              head.includes(`Closes #${issueNumber}`) ||
               head.includes(path.basename(worktreePath))
             ) {
               return candidate.transcriptPath;
@@ -421,8 +453,8 @@ ${guidelines}
           } catch {}
         }
 
-        // Fallback to newest
-        return dirStats[0].transcriptPath;
+        // Do NOT fall back to arbitrary newest session (avoids cross-session log leakage)
+        return undefined;
       } catch {
         return undefined;
       }
