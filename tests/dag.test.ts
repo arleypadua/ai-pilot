@@ -730,6 +730,39 @@ describe('IssueDAG', () => {
     expect(dag.getReadyNodes().map((n) => n.issue.number)).toEqual([186]);
     expect(dag.getBlockedNodes().map((n) => n.issue.number).sort()).toEqual([187, 195]);
   });
+
+  it('should respect allowedProviders when assigning node.runnerName from issue labels', () => {
+    const issues: GitHubIssue[] = [
+      {
+        number: 10,
+        title: 'Task with agy label',
+        body: 'Do something',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }, { name: 'runner:agy' }],
+        url: 'https://github.com/owner/repo/issues/10',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+    ];
+
+    // Case 1: agy is allowed
+    const dagAllowed = new IssueDAG({
+      ...DEFAULT_CONFIG,
+      runner: 'claude',
+      allowedProviders: ['claude', 'agy'],
+    });
+    dagAllowed.build(issues);
+    expect(dagAllowed.getNode(10)?.runnerName).toBe('agy');
+
+    // Case 2: agy is NOT allowed -> falls back to default runner (claude)
+    const dagDisallowed = new IssueDAG({
+      ...DEFAULT_CONFIG,
+      runner: 'claude',
+      allowedProviders: ['claude'],
+    });
+    dagDisallowed.build(issues);
+    expect(dagDisallowed.getNode(10)?.runnerName).toBe('claude');
+  });
 });
 
 describe('parseSpecsOption', () => {

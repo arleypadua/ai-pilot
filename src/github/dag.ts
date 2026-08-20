@@ -35,11 +35,15 @@ export class IssueDAG {
     for (const issue of issues) {
       const deps = parseIssueDependencies(issue);
       let runnerName = this.config.runner || 'claude';
+      const allowed = this.config.allowedProviders || this.config.allowedRunners;
       if (issue.labels) {
         for (const label of issue.labels) {
           const match = label.name.match(/^(?:runner|agent):([a-zA-Z0-9_-]+)$/i);
           if (match && match[1]) {
-            runnerName = match[1].toLowerCase();
+            const requested = match[1].toLowerCase();
+            if (!allowed || allowed.includes(requested)) {
+              runnerName = requested;
+            }
             break;
           }
         }

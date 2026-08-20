@@ -11,9 +11,19 @@ import type {
 
 export class Notifier {
   private static emitter = new EventEmitter();
+  private static logHandler?: (message: string) => void;
+  private static isInteractive: boolean = false;
 
   public static get events(): EventEmitter {
     return Notifier.emitter;
+  }
+
+  public static setLogHandler(handler?: (message: string) => void): void {
+    Notifier.logHandler = handler;
+  }
+
+  public static setInteractive(interactive: boolean): void {
+    Notifier.isInteractive = interactive;
   }
 
   public static on(event: string, listener: (...args: any[]) => void): void {
@@ -28,12 +38,22 @@ export class Notifier {
     Notifier.emitter.removeAllListeners(event);
   }
 
+  private static emitLog(rawMessage: string, formattedCliMessage?: string): void {
+    if (Notifier.logHandler) {
+      try {
+        Notifier.logHandler(rawMessage);
+      } catch {}
+    }
+    if (!Notifier.isInteractive) {
+      console.log(formattedCliMessage || rawMessage);
+    }
+  }
+
   public static notifyTaskStarted(payload: TaskStartedNotificationPayload): void {
-    console.log(
-      pc.cyan(
-        `\n🤖 [Task ${payload.isContinuation ? 'Resumed' : 'Started'}] Issue #${payload.issueNumber}: ${payload.issueTitle} [${payload.runnerName}]`
-      )
-    );
+    const runnerTag = payload.runnerName ? ` [${payload.runnerName}]` : '';
+    const action = payload.isContinuation ? 'Resumed' : 'Started';
+    const raw = `🤖 [Task ${action}] Issue #${payload.issueNumber}: ${payload.issueTitle}${runnerTag}`;
+    Notifier.emitLog(raw, pc.cyan(`\n${raw}`));
     Notifier.emitter.emit('task_started', payload);
   }
 
@@ -46,10 +66,11 @@ export class Notifier {
     issueUrl?: string,
     choices?: string[]
   ): void {
-    console.log(pc.yellow(`\n🔔 [Human Feedback Required] Issue #${issueNumber}: ${issueTitle}`));
-    if (question) {
-      console.log(pc.yellow(`   Question: ${question}`));
-    }
+    const raw = `🔔 [Human Feedback Required] Issue #${issueNumber}: ${issueTitle}${question ? ` (Question: ${question})` : ''}`;
+    const cliMsg = question
+      ? `${pc.yellow(`\n🔔 [Human Feedback Required] Issue #${issueNumber}: ${issueTitle}`)}\n${pc.yellow(`   Question: ${question}`)}`
+      : pc.yellow(`\n🔔 [Human Feedback Required] Issue #${issueNumber}: ${issueTitle}`);
+    Notifier.emitLog(raw, cliMsg);
     const payload: NeedsInfoNotificationPayload = {
       issueNumber,
       issueTitle,
@@ -75,19 +96,25 @@ export class Notifier {
   }
 
   public static notifySpecComplete(specNumber: number, specTitle: string): void {
-    console.log(pc.magenta(`\n🎉 [Spec Complete] Spec #${specNumber}: ${specTitle} — Waiting for developer review & closure.`));
+    const raw = `🎉 [Spec Complete] Spec #${specNumber}: ${specTitle} — Waiting for developer review & closure.`;
+    Notifier.emitLog(raw, pc.magenta(`\n${raw}`));
     const payload: SpecCompletedNotificationPayload = { specNumber, specTitle };
     Notifier.emitter.emit('spec_completed', payload);
   }
 
   public static notifyQuotaPaused(resetAt: Date, waitMinutes: number, runnerName?: string): void {
     const timeStr = resetAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    console.log(pc.red(`\n⏳ [Quota Limit] Pausing workers until ${timeStr} (~${waitMinutes} min)`));
+    const runnerStr = runnerName ? ` [${runnerName}]` : '';
+    const raw = `⏳ [Quota Limit] Pausing workers until ${timeStr} (~${waitMinutes} min)${runnerStr}`;
+    Notifier.emitLog(raw, pc.red(`\n${raw}`));
     const payload: QuotaPausedNotificationPayload = { resetAt, waitMinutes, runnerName };
     Notifier.emitter.emit('quota_paused', payload);
   }
 
   public static notifyQuotaResumed(runnerName?: string): void {
+    const runnerStr = runnerName ? ` [${runnerName}]` : '';
+    const raw = `🔄 [Quota Resumed] Quota limits cleared. Resuming workers.${runnerStr}`;
+    Notifier.emitLog(raw, pc.green(`\n${raw}`));
     const payload: QuotaResumedNotificationPayload = { runnerName };
     Notifier.emitter.emit('quota_resumed', payload);
   }
@@ -99,7 +126,9 @@ export class Notifier {
     prNumber?: number,
     baseBranch?: string
   ): void {
-    console.log(pc.green(`\n🎉 [Completed & Merged] Issue #${issueNumber}: ${issueTitle} ${prUrl ? `(${prUrl})` : ''}`));
+    const prStr = prUrl ? ` (${prUrl})` : '';
+    const raw = `🎉 [Completed & Merged] Issue #${issueNumber}: ${issueTitle}${prStr}`;
+    Notifier.emitLog(raw, pc.green(`\n${raw}`));
     const payload: TaskCompletedNotificationPayload = {
       issueNumber,
       issueTitle,

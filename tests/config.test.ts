@@ -575,6 +575,21 @@ describe('Configuration file helpers', () => {
       expect(loaded.baseBranch).toBe('main');
     });
 
+    it('saves and loads allowedProviders and allowedRunners array', async () => {
+      const configData = {
+        repository: 'owner/allowed-providers-repo',
+        allowedProviders: ['claude', 'agy'],
+        runner: 'claude' as const,
+      };
+
+      const savedPath = saveConfig(configData, undefined, tmpDir);
+      expect(fs.existsSync(savedPath)).toBe(true);
+
+      const loaded = await loadConfig(undefined, tmpDir);
+      expect(loaded.repository).toBe('owner/allowed-providers-repo');
+      expect(loaded.allowedProviders).toEqual(['claude', 'agy']);
+    });
+
     it('loads config from custom file path', async () => {
       const customFile = path.join(tmpDir, 'custom.config.json');
       fs.writeFileSync(

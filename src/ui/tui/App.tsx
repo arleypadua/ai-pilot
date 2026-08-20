@@ -10,7 +10,9 @@ import { UsageView } from './UsageView.js';
 import { SpecPickerView, type SpecOption } from './SpecPickerView.js';
 import { ActivityLogView } from './ActivityLogView.js';
 import { CategoryIssuesView, type CategoryIssueItem } from './CategoryIssuesView.js';
+import { ProvidersPickerView } from './ProvidersPickerView.js';
 import { AVAILABLE_COMMANDS, type CommandResult } from './CommandPalette.js';
+import type { ProviderInfo } from '../../types/index.js';
 
 interface AppProps {
   orchestrator: Orchestrator;
@@ -19,7 +21,7 @@ interface AppProps {
 
 export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
   const { exit } = useApp();
-  const [view, setView] = useState<'dashboard' | 'inspect' | 'usage' | 'spec_picker' | 'logs' | 'category_issues'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'inspect' | 'usage' | 'spec_picker' | 'logs' | 'category_issues' | 'providers'>('dashboard');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [inspectIssueNumber, setInspectIssueNumber] = useState<number | null>(null);
   const [inputText, setInputText] = useState('');
@@ -32,6 +34,11 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
   const [selectedSpecNumbers, setSelectedSpecNumbers] = useState<Set<number>>(new Set());
   const [isAllTasksSelected, setIsAllTasksSelected] = useState(false);
   const [logScrollOffset, setLogScrollOffset] = useState(0);
+
+  // Providers View State
+  const [providersList, setProvidersList] = useState<ProviderInfo[]>([]);
+  const [highlightedProviderIndex, setHighlightedProviderIndex] = useState(0);
+  const [providersStatusMessage, setProvidersStatusMessage] = useState<string | undefined>(undefined);
 
   // Category Issues View State
   const [selectedCategory, setSelectedCategory] = useState<'specs' | 'ready' | 'waiting' | 'blocked'>('ready');
@@ -244,8 +251,10 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
     };
   }, [eventBus]);
 
-  const handleQuit = () => {
-    orchestrator.stop();
+  const handleQuit = async () => {
+    try {
+      await orchestrator.stop();
+    } catch {}
     if (onExit) {
       onExit();
     } else {
@@ -382,12 +391,29 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
       return;
     }
 
+    if (
+      cmd === '/providers' ||
+      cmd === 'providers' ||
+      cmd === '/runners' ||
+      cmd === 'runners' ||
+      cmd === '/allowed-providers' ||
+      cmd === 'allowed-providers'
+    ) {
+      const detected = await orchestrator.getDetectedProviders();
+      setProvidersList(detected);
+      setHighlightedProviderIndex(0);
+      setProvidersStatusMessage(undefined);
+      setView('providers');
+      return;
+    }
+
     if (cmd === '/help' || cmd === 'help') {
       setCommandResult({
         type: 'info',
         title: 'ℹ️ Available Commands & Keyboard Shortcuts',
         lines: [
           '/specs          - Change target specs scope or select Any unblocked task',
+          '/providers      - Toggle allowed LLM providers/runners for this repository',
           '/logs           - Open dedicated system and daemon activity logs window',
           '/usage          - Open live quota telemetry window with scheduled wake-up timer',
           '/install-skills - Install Imagos AI skills into your agent environment via skills.sh',
@@ -892,8 +918,94 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
         handleQuit();
         return;
       }
+    } else if (view === 'providers') {
+      if (key.escape) {
+        setView('dashboard');
+        setProvidersStatusMessage(undefined);
+        return;
+      }
+
+      if (key.upArrow || input === 'k') {
+        setHighlightedProviderIndex((prev) => Math.max(0, prev - 1));
+        return;
+      }
+
+      if (key.downArrow || input === 'j') {
+        setHighlightedProviderIndex((prev) => Math.min(Math.max(0, providersList.length - 1), prev + 1));
+        return;
+      }
+
+      if (input === ' ') {
+        const current = providersList[highlightedProviderIndex];
+        if (current) {
+          setProvidersList((prev) =>
+            prev.map((p, idx) => (idx === highlightedProviderIndex ? { ...p, isAllowed: !p.isAllowed } : p))
+          );
+        }
+        return;
+      }
+
+      if (input === 'd') {
+        const current = providersList[highlightedProviderIndex];
+        if (current) {
+          setProvidersList((prev) =>
+            prev.map((p, idx) =>
+              idx === highlightedProviderIndex
+                ? { ...p, isDefault: true, isAllowed: true }
+                : { ...p, isDefault: false }
+            )
+          );
+          setProvidersStatusMessage(`✓ Set default runner to ${current.displayName}`);
+          setTimeout(() => setProvidersStatusMessage(undefined), 3000);
+        }
+        return;
+      }
+
+      if (input === 'a') {
+        setProvidersList((prev) =>
+          prev.map((p) => ({ ...p, isAllowed: p.isInstalled }))
+        );
+        setProvidersStatusMessage('✓ Allowed all installed providers');
+        setTimeout(() => setProvidersStatusMessage(undefined), 3000);
+        return;
+      }
+
+      if (key.return) {
+        const allowedIds = providersList.filter((p) => p.isAllowed).map((p) => p.id);
+        const defaultRunner = providersList.find((p) => p.isDefault)?.id || config.runner;
+
+        orchestrator.setAllowedProviders(allowedIds, defaultRunner).then((res) => {
+          setCommandResult({
+            type: 'success',
+            title: '🔌 Allowed Providers Configured',
+            lines: [
+              `Saved allowed providers to .autopilot/config.json: ${allowedIds.length > 0 ? allowedIds.join(', ') : 'none'}`,
+              `Default runner: ${defaultRunner}`,
+            ],
+          });
+        });
+
+        setView('dashboard');
+        return;
+      }
+
+      if (input === 'q' || (key.ctrl && input === 'c')) {
+        handleQuit();
+        return;
+      }
     }
   });
+
+  if (view === 'providers') {
+    return (
+      <ProvidersPickerView
+        providers={providersList}
+        highlightedIndex={highlightedProviderIndex}
+        statusMessage={providersStatusMessage}
+        repository={config.repository}
+      />
+    );
+  }
 
   if (view === 'category_issues') {
     const issues = buildCategoryIssues(selectedCategory);

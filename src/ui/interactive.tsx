@@ -3,6 +3,8 @@ import { render } from 'ink';
 import { App } from './tui/App.js';
 import type { Orchestrator } from '../pipeline/orchestrator.js';
 
+import { Notifier } from '../notifications/notifier.js';
+
 export interface InteractiveDashboardInstance {
   unmount: () => void;
   waitUntilExit: () => Promise<unknown>;
@@ -10,22 +12,26 @@ export interface InteractiveDashboardInstance {
 
 export function startInteractiveDashboard(
   orchestrator: Orchestrator,
-  onExitCallback?: () => void
+  onExitCallback?: () => void | Promise<void>
 ): InteractiveDashboardInstance {
   orchestrator.setInteractive(true);
+  Notifier.setInteractive(true);
+  Notifier.setLogHandler((msg) => orchestrator.getDashboard().log(msg));
 
   let isExiting = false;
-  const handleExit = () => {
+  const handleExit = async () => {
     if (isExiting) return;
     isExiting = true;
+    Notifier.setInteractive(false);
+    Notifier.setLogHandler(undefined);
     try {
       instance.unmount();
     } catch {}
     try {
-      orchestrator.stop();
+      await orchestrator.stop();
     } catch {}
     if (onExitCallback) {
-      onExitCallback();
+      await onExitCallback();
     } else {
       process.exit(0);
     }

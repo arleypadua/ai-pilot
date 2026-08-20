@@ -49,6 +49,11 @@ export const AVAILABLE_COMMANDS: CommandDefinition[] = [
     aliases: ['install-skills', '/skills', 'skills', '/skills-install'],
   },
   {
+    name: '/providers',
+    description: 'Toggle allowed LLM providers/runners for this repository (.autopilot/config.json)',
+    aliases: ['providers', '/runners', 'runners', '/allowed-providers', 'allowed-providers'],
+  },
+  {
     name: '/help',
     description: 'List all available slash commands and keyboard shortcuts',
     aliases: ['help'],

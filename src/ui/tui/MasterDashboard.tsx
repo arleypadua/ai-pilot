@@ -186,7 +186,7 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
           </Text>
         </Box>
         <Text color="gray">
-          Default Runner: {config.runner} | Concurrency: {workers.filter((w) => !w.isWip).length}/{config.maxConcurrency}
+          Default Runner: {config.runner}{config.allowedProviders ? ` | Allowed: ${config.allowedProviders.length > 0 ? config.allowedProviders.join(', ') : 'none'}` : ''} | Concurrency: {workers.filter((w) => !w.isWip).length}/{config.maxConcurrency}
         </Text>
       </Box>
 
