@@ -644,7 +644,7 @@ describe('resolveTelegramCredentials across hierarchical tiers', () => {
       expect(loaded?.telegram?.bots?.['@imagos_frontend_bot']?.allowedChatIds).toEqual([123456789, -1001234567890]);
     });
 
-    it('saveTelegramBot adds and updates bots cleanly in ~/.imagos/config.json', () => {
+    it('saveTelegramBot adds and updates bots cleanly in ~/.imagos/credentials.json', () => {
       saveTelegramBot('@imagos_backend_bot', { token: 'token-1', allowedChatIds: [111] }, undefined, tmpHomeDir);
       saveTelegramBot({ botHandle: '@imagos_frontend_bot', token: 'token-2', allowedChatIds: [222], homeDir: tmpHomeDir });
 
@@ -659,7 +659,7 @@ describe('resolveTelegramCredentials across hierarchical tiers', () => {
   });
 
   describe('Multi-Bot Resolution & Fail-Fast Validation (Issue #35)', () => {
-    it('resolves bot credentials from ~/.imagos/config.json when telegram.bot is defined in repo config', () => {
+    it('resolves bot credentials from ~/.imagos/credentials.json when telegram.bot is defined in repo config', () => {
       saveTelegramBot('@imagos_backend_bot', { token: 'backend-token', allowedChatIds: [123456789] }, undefined, tmpHomeDir);
 
       const resolved = resolveTelegramCredentials({
@@ -725,7 +725,7 @@ describe('resolveTelegramCredentials across hierarchical tiers', () => {
       ).toThrow("Telegram is enabled, but no 'telegram.bot' handle is defined in .autopilot/config.json.");
     });
 
-    it('throws fail-fast error when bot handle is not found in ~/.imagos/config.json', () => {
+    it('throws fail-fast error when bot handle is not found in ~/.imagos/credentials.json', () => {
       expect(() =>
         resolveTelegramCredentials({
           homeDir: tmpHomeDir,
@@ -737,7 +737,7 @@ describe('resolveTelegramCredentials across hierarchical tiers', () => {
             },
           },
         })
-      ).toThrow("Bot handle '@non_existent_bot' not found in ~/.imagos/config.json. Run 'imagos init' to configure it.");
+      ).toThrow("Bot handle '@non_existent_bot' not found in ~/.imagos/credentials.json. Run 'imagos init' to configure it.");
     });
 
     it('prioritizes IMAGOS_TELEGRAM_BOT_TOKEN environment variable override', () => {

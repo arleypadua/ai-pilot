@@ -373,8 +373,11 @@ describe('TelegramRemoteProvider', () => {
       const setMyCommandsCall = apiCalls.find((c) => c.method === 'setMyCommands');
       expect(setMyCommandsCall).toBeDefined();
       expect(setMyCommandsCall?.payload.commands).toEqual([
+        { command: 'start', description: 'Show command reference and status' },
         { command: 'status', description: 'View active tasks, worktrees & DAG' },
+        { command: 'tasks', description: 'List in-progress and queued tasks' },
         { command: 'specs', description: 'List and switch scoped parent specs' },
+        { command: 'pause', description: 'Pause all workers or a specific issue' },
         { command: 'resume', description: 'Clear rate-limit pause and resume workers' },
         { command: 'clean', description: 'Clean inactive worktrees and temp branches' },
         { command: 'inspect', description: 'Inspect active worker tool calls & diffs' },

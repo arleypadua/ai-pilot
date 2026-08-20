@@ -59,12 +59,22 @@ async function promptNewBot(rl: readline.Interface, initialHandle?: string): Pro
   return normalizedHandle;
 }
 
+function getPackageVersion(): string {
+  try {
+    const pkgPath = new URL('../package.json', import.meta.url);
+    const raw = fs.readFileSync(pkgPath, 'utf8');
+    return JSON.parse(raw).version || '0.4.0';
+  } catch {
+    return '0.4.0';
+  }
+}
+
 const program = new Command();
 
 program
   .name('imagos')
   .description('Autonomous multi-agent GitHub issue orchestrator powered by Claude CLI & git worktrees')
-  .version('0.2.0');
+  .version(getPackageVersion());
 
 // 1. START COMMAND
 program
@@ -291,7 +301,7 @@ program
           token: botToken,
           allowedChatIds: allowedChatIds || [],
         });
-        console.log(pc.green(`✓ Saved bot credentials for ${pc.bold(selectedBotHandle)} in ~/.imagos/config.json`));
+        console.log(pc.green(`✓ Saved bot credentials for ${pc.bold(selectedBotHandle)} in ~/.imagos/credentials.json`));
       } else if (botToken || (allowedUserIds && allowedUserIds.length > 0)) {
         const savedCredsPath = saveTelegramCredentials({
           repository: detectedRepo && detectedRepo !== 'owner/repo' ? detectedRepo : undefined,

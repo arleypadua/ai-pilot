@@ -177,6 +177,9 @@ export class RemoteControlManager {
     }
 
     if (this.provider.onCommand) {
+      this.provider.onCommand('start', async (args, userId, context) => {
+        await this.handleHelpCommand(args, userId, context);
+      });
       this.provider.onCommand('status', async (args, userId, context) => {
         await this.handleStatusCommand(args, userId, context);
       });

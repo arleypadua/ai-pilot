@@ -58,6 +58,7 @@ export const TelegramCredentialsSchema = z
     allowedUserIds: z.array(z.number().int()).optional(),
     defaultChatId: z.union([z.number().int(), z.string()]).optional(),
     chatId: z.union([z.number().int(), z.string()]).optional(),
+    bots: z.record(TelegramBotConfigSchema).optional(),
     repositories: z.record(TelegramRepoCredentialsSchema).optional(),
   })
   .passthrough();
@@ -353,7 +354,7 @@ export function saveUserConfig(
 }
 
 /**
- * Saves or updates Telegram bot credentials in ~/.imagos/config.json under telegram.bots[botHandle].
+ * Saves or updates Telegram bot credentials in ~/.imagos/credentials.json under telegram.bots[botHandle].
  */
 export function saveTelegramBot(
   botHandleOrOptions: string | SaveTelegramBotOptions,
@@ -379,46 +380,68 @@ export function saveTelegramBot(
     allowedChatIds = botConfig?.allowedChatIds;
   }
 
-  let config: UserConfig = {};
+  let credentials: Credentials = {};
   try {
-    const existing = loadUserConfig(targetPath, targetHome);
+    const existing = loadCredentialsFile(targetPath, targetHome);
     if (existing) {
-      config = existing;
+      credentials = existing;
     }
   } catch {
     // Start fresh if unreadable
   }
 
-  if (!config.telegram) {
-    config.telegram = {};
+  if (!credentials.telegram) {
+    credentials.telegram = {};
   }
-  if (!config.telegram.bots) {
-    config.telegram.bots = {};
+  if (!credentials.telegram.bots) {
+    credentials.telegram.bots = {};
   }
 
   const normalizedHandle = handle.startsWith('@') ? handle : `@${handle}`;
-  config.telegram.bots[normalizedHandle] = {
+  credentials.telegram.bots[normalizedHandle] = {
     token,
     allowedChatIds: allowedChatIds || [],
   };
 
-  return saveUserConfig(config, targetPath, targetHome);
+  return saveCredentialsFile(credentials, targetPath, targetHome);
 }
 
 /**
- * Retrieves a Telegram bot configuration by handle from ~/.imagos/config.json.
+ * Retrieves a Telegram bot configuration by handle from ~/.imagos/credentials.json (falling back to legacy config.json).
  */
 export function getTelegramBot(
   botHandle: string,
   customPath?: string,
   homeDir?: string
 ): TelegramBotConfig | null {
-  const config = loadUserConfig(customPath, homeDir);
-  if (!config?.telegram?.bots) return null;
-  const bots = config.telegram.bots;
   const normalizedHandle = botHandle.startsWith('@') ? botHandle : `@${botHandle}`;
   const rawHandle = botHandle.replace(/^@/, '');
-  return bots[botHandle] || bots[normalizedHandle] || bots[rawHandle] || null;
+
+  // 1. Check ~/.imagos/credentials.json first
+  try {
+    const creds = loadCredentialsFile(customPath, homeDir);
+    if (creds?.telegram?.bots) {
+      const bots = creds.telegram.bots;
+      const found = bots[botHandle] || bots[normalizedHandle] || bots[rawHandle];
+      if (found && (found.token || (found as any).botToken)) {
+        return found;
+      }
+    }
+  } catch {}
+
+  // 2. Fallback to legacy ~/.imagos/config.json
+  try {
+    const config = loadUserConfig(customPath, homeDir);
+    if (config?.telegram?.bots) {
+      const bots = config.telegram.bots;
+      const found = bots[botHandle] || bots[normalizedHandle] || bots[rawHandle];
+      if (found && (found.token || (found as any).botToken)) {
+        return found;
+      }
+    }
+  } catch {}
+
+  return null;
 }
 
 /**
@@ -564,12 +587,12 @@ export function resolveTelegramCredentials(
     };
   }
 
-  // 2. If botHandle is provided, look up in ~/.imagos/config.json
+  // 2. If botHandle is provided, look up in ~/.imagos/credentials.json
   if (botHandle) {
-    const botData = getTelegramBot(botHandle, options.userConfigPath, options.homeDir);
+    const botData = getTelegramBot(botHandle, options.credentialsPath || options.userConfigPath, options.homeDir);
     if (!botData || !botData.token?.trim()) {
       throw new Error(
-        `Bot handle '${botHandle}' not found in ~/.imagos/config.json. Run 'imagos init' to configure it.`
+        `Bot handle '${botHandle}' not found in ~/.imagos/credentials.json. Run 'imagos init' to configure it.`
       );
     }
 
@@ -734,6 +757,19 @@ export function resolveTelegramCredentials(
   if (defaultChatId === undefined && options.config?.remote?.telegram?.defaultChatId !== undefined) {
     defaultChatId = options.config.remote.telegram.defaultChatId;
     defaultChatIdSource = 'config';
+  }
+
+  if (defaultChatId === undefined) {
+    const configChatIds = parseAllowedChatIds(
+      options.config?.telegram?.allowedChatIds || options.config?.remote?.telegram?.allowedChatIds
+    );
+    if (configChatIds && configChatIds.length > 0) {
+      defaultChatId = configChatIds[0];
+      defaultChatIdSource = 'config';
+    } else if (allowedUserIds && allowedUserIds.length > 0) {
+      defaultChatId = allowedUserIds[0];
+      defaultChatIdSource = allowedUserIdsSource;
+    }
   }
 
   return {

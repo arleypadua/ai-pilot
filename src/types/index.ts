@@ -180,6 +180,7 @@ export interface TelegramCredentials {
   allowedUserIds?: number[];
   defaultChatId?: number | string;
   chatId?: number | string;
+  bots?: Record<string, TelegramBotConfig>;
   repositories?: Record<string, TelegramRepoCredentials>;
 }
 

@@ -10,8 +10,11 @@ import { TelegramRateLimiter } from './rate_limiter.js';
 import { ActivityLogger } from '../logger/index.js';
 
 export const BOT_COMMANDS = [
+  { command: 'start', description: 'Show command reference and status' },
   { command: 'status', description: 'View active tasks, worktrees & DAG' },
+  { command: 'tasks', description: 'List in-progress and queued tasks' },
   { command: 'specs', description: 'List and switch scoped parent specs' },
+  { command: 'pause', description: 'Pause all workers or a specific issue' },
   { command: 'resume', description: 'Clear rate-limit pause and resume workers' },
   { command: 'clean', description: 'Clean inactive worktrees and temp branches' },
   { command: 'inspect', description: 'Inspect active worker tool calls & diffs' },
@@ -271,11 +274,26 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
       extra.reply_markup = keyboard;
     }
 
-    const res = await this.rateLimiter.enqueue(targetChatId, () =>
-      this.bot.api.sendMessage(targetChatId, text, extra)
-    );
-
-    return { messageId: res.message_id };
+    try {
+      const res = await this.rateLimiter.enqueue(targetChatId, () =>
+        this.bot.api.sendMessage(targetChatId, text, extra)
+      );
+      return { messageId: res.message_id };
+    } catch (err: any) {
+      if (err?.error_code === 400 && err?.description?.includes('chat not found')) {
+        const handleStr = this.botHandle ? ` (${this.botHandle})` : '';
+        throw new Error(
+          `Chat not found for chatId "${targetChatId}". The user must open the Telegram bot${handleStr} and tap "Start" before the bot can send notifications.`
+        );
+      }
+      if (err?.error_code === 403) {
+        const handleStr = this.botHandle ? ` (${this.botHandle})` : '';
+        throw new Error(
+          `Cannot message user "${targetChatId}" (403 Forbidden). Please open the Telegram bot${handleStr} and tap "Start" to permit messages.`
+        );
+      }
+      throw err;
+    }
   }
 
   public async editMessage(
@@ -313,9 +331,25 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
       extra.reply_markup = { inline_keyboard: [] };
     }
 
-    await this.rateLimiter.enqueue(targetChatId, () =>
-      this.bot.api.editMessageText(targetChatId, messageId, text, extra)
-    );
+    try {
+      await this.rateLimiter.enqueue(targetChatId, () =>
+        this.bot.api.editMessageText(targetChatId, messageId, text, extra)
+      );
+    } catch (err: any) {
+      if (err?.error_code === 400 && err?.description?.includes('chat not found')) {
+        const handleStr = this.botHandle ? ` (${this.botHandle})` : '';
+        throw new Error(
+          `Chat not found for chatId "${targetChatId}". The user must open the Telegram bot${handleStr} and tap "Start" before the bot can send notifications.`
+        );
+      }
+      if (err?.error_code === 403) {
+        const handleStr = this.botHandle ? ` (${this.botHandle})` : '';
+        throw new Error(
+          `Cannot message user "${targetChatId}" (403 Forbidden). Please open the Telegram bot${handleStr} and tap "Start" to permit messages.`
+        );
+      }
+      throw err;
+    }
   }
 
   public async start(): Promise<void> {
@@ -327,6 +361,13 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
     } catch (err: any) {
       ActivityLogger.warn(`Warning: Failed to register Telegram bot commands: ${err?.message || err}`);
     }
+
+    try {
+      this.bot.api.getMe().then((me) => {
+        this.botHandle = `@${me.username}`;
+        ActivityLogger.info(`Telegram remote control online as @${me.username} (https://t.me/${me.username})`);
+      }).catch(() => {});
+    } catch {}
 
     try {
       this.bot
