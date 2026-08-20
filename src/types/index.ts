@@ -113,6 +113,86 @@ export interface RunnerConfig {
 
 export type RunnerConfigs = RunnerConfig;
 
+export interface TelegramNotificationsConfig {
+  needsInfo: boolean;
+  quotaPaused: boolean;
+  taskCompleted: boolean;
+  specCompleted: boolean;
+}
+
+export interface TelegramRemoteConfig {
+  botTokenEnv: string;
+  allowedUserIds?: number[];
+  defaultChatId?: number | string;
+  notifications: TelegramNotificationsConfig;
+}
+
+export interface RemoteControlConfig {
+  enabled: boolean;
+  provider: 'telegram' | 'slack' | 'discord';
+  telegram: TelegramRemoteConfig;
+}
+
+export interface TelegramRepoCredentials {
+  botToken?: string;
+  allowedUserIds?: number[];
+  defaultChatId?: number | string;
+  chatId?: number | string;
+}
+
+export interface TelegramCredentials {
+  defaultBotToken?: string;
+  botToken?: string;
+  defaultAllowedUserIds?: number[];
+  allowedUserIds?: number[];
+  defaultChatId?: number | string;
+  chatId?: number | string;
+  repositories?: Record<string, TelegramRepoCredentials>;
+}
+
+export interface Credentials {
+  telegram?: TelegramCredentials;
+  [key: string]: unknown;
+}
+
+export type CredentialSource =
+  | 'env_file'
+  | 'credentials_file_repo'
+  | 'credentials_file_global'
+  | 'process_env'
+  | 'config'
+  | 'none';
+
+export interface ResolvedTelegramCredentials {
+  botToken?: string;
+  allowedUserIds?: number[];
+  defaultChatId?: number | string;
+  source: {
+    botToken: CredentialSource;
+    allowedUserIds: CredentialSource;
+    defaultChatId: CredentialSource;
+  };
+}
+
+export interface ResolveCredentialsOptions {
+  cwd?: string;
+  envPath?: string;
+  credentialsPath?: string;
+  homeDir?: string;
+  repository?: string;
+  config?: AutoPilotConfig | Partial<AutoPilotConfig>;
+  env?: NodeJS.ProcessEnv;
+}
+
+export interface SaveTelegramCredentialsOptions {
+  botToken?: string;
+  allowedUserIds?: number[];
+  defaultChatId?: number | string;
+  repository?: string;
+  customPath?: string;
+  homeDir?: string;
+}
+
 export interface AutoPilotConfig {
   repository?: string;
   targetSpec?: number | number[];
@@ -128,6 +208,7 @@ export interface AutoPilotConfig {
   autoMerge: boolean;
   mergeMethod: 'squash' | 'merge' | 'rebase';
   cleanupWorktreeOnClose: boolean;
+  remote: RemoteControlConfig;
   quota: {
     pauseOnLimit: boolean;
     utilizationThreshold: number;

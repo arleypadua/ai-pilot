@@ -92,6 +92,75 @@
       "default": true,
       "description": "Whether to automatically delete the worktree and branch once the issue is merged and closed"
     },
+    "remote": {
+      "type": "object",
+      "description": "Remote control and notification settings (e.g. Telegram bot)",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether remote control is enabled"
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["telegram", "slack", "discord"],
+          "default": "telegram",
+          "description": "Remote control provider"
+        },
+        "telegram": {
+          "type": "object",
+          "description": "Telegram provider configuration",
+          "properties": {
+            "botTokenEnv": {
+              "type": "string",
+              "default": "TELEGRAM_BOT_TOKEN",
+              "description": "Environment variable name containing the Telegram bot token"
+            },
+            "allowedUserIds": {
+              "type": "array",
+              "items": { "type": "integer" },
+              "description": "Whitelisted Telegram user IDs allowed to interact with the bot"
+            },
+            "defaultChatId": {
+              "oneOf": [
+                { "type": "integer" },
+                { "type": "string" }
+              ],
+              "description": "Default Telegram chat ID or channel username for milestone notifications"
+            },
+            "notifications": {
+              "type": "object",
+              "description": "Notification event toggles",
+              "properties": {
+                "needsInfo": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Notify when an agent requires developer feedback (needs-info)"
+                },
+                "quotaPaused": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Notify when quota limit is reached and workers are paused"
+                },
+                "taskCompleted": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Notify when a task is completed and PR is created/merged"
+                },
+                "specCompleted": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Notify when all child tickets of a parent spec are completed"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "quota": {
       "type": "object",
       "description": "5-hour rolling quota and rate limit settings",

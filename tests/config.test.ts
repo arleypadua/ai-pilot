@@ -7,6 +7,9 @@ import {
   AutoPilotConfigSchema,
   RunnerConfigSchema,
   AgyRunnerConfigSchema,
+  RemoteControlConfigSchema,
+  TelegramRemoteConfigSchema,
+  TelegramNotificationsConfigSchema,
   DEFAULT_CONFIG,
   parseSpecsOption,
   loadConfig,
@@ -32,6 +35,20 @@ describe('AutoPilotConfigSchema', () => {
       expect(config.repository).toBeUndefined();
       expect(config.extraPrompt).toBeUndefined();
       expect(config.runnerConfig).toBeUndefined();
+
+      expect(config.remote).toEqual({
+        enabled: false,
+        provider: 'telegram',
+        telegram: {
+          botTokenEnv: 'TELEGRAM_BOT_TOKEN',
+          notifications: {
+            needsInfo: true,
+            quotaPaused: true,
+            taskCompleted: true,
+            specCompleted: true,
+          },
+        },
+      });
 
       expect(config.quota).toEqual({
         pauseOnLimit: true,
@@ -68,6 +85,21 @@ describe('AutoPilotConfigSchema', () => {
         autoMerge: false,
         mergeMethod: 'rebase' as const,
         cleanupWorktreeOnClose: false,
+        remote: {
+          enabled: true,
+          provider: 'telegram' as const,
+          telegram: {
+            botTokenEnv: 'CUSTOM_TELEGRAM_TOKEN',
+            allowedUserIds: [123456789, 987654321],
+            defaultChatId: -1001234567890,
+            notifications: {
+              needsInfo: true,
+              quotaPaused: false,
+              taskCompleted: true,
+              specCompleted: false,
+            },
+          },
+        },
         quota: {
           pauseOnLimit: false,
           utilizationThreshold: 0.9,
@@ -95,6 +127,7 @@ describe('AutoPilotConfigSchema', () => {
       expect(result.autoMerge).toBe(false);
       expect(result.mergeMethod).toBe('rebase');
       expect(result.cleanupWorktreeOnClose).toBe(false);
+      expect(result.remote).toEqual(custom.remote);
       expect(result.quota).toEqual({
         pauseOnLimit: false,
         utilizationThreshold: 0.9,
@@ -216,6 +249,112 @@ describe('AutoPilotConfigSchema', () => {
       });
       expect(parsed?.agy?.model).toBe('gemini-3.7-flash');
       expect(parsed?.agy?.effort).toBe('low');
+    });
+  });
+
+  describe('remote configuration', () => {
+    it('TelegramNotificationsConfigSchema defaults all notification toggles to true', () => {
+      const notifications = TelegramNotificationsConfigSchema.parse({});
+      expect(notifications.needsInfo).toBe(true);
+      expect(notifications.quotaPaused).toBe(true);
+      expect(notifications.taskCompleted).toBe(true);
+      expect(notifications.specCompleted).toBe(true);
+    });
+
+    it('TelegramNotificationsConfigSchema allows partial overrides', () => {
+      const notifications = TelegramNotificationsConfigSchema.parse({
+        needsInfo: false,
+        specCompleted: false,
+      });
+      expect(notifications.needsInfo).toBe(false);
+      expect(notifications.quotaPaused).toBe(true);
+      expect(notifications.taskCompleted).toBe(true);
+      expect(notifications.specCompleted).toBe(false);
+    });
+
+    it('TelegramRemoteConfigSchema applies default botTokenEnv and notifications', () => {
+      const telegram = TelegramRemoteConfigSchema.parse({});
+      expect(telegram.botTokenEnv).toBe('TELEGRAM_BOT_TOKEN');
+      expect(telegram.allowedUserIds).toBeUndefined();
+      expect(telegram.defaultChatId).toBeUndefined();
+      expect(telegram.notifications).toEqual({
+        needsInfo: true,
+        quotaPaused: true,
+        taskCompleted: true,
+        specCompleted: true,
+      });
+    });
+
+    it('TelegramRemoteConfigSchema parses allowedUserIds and defaultChatId', () => {
+      const telegram = TelegramRemoteConfigSchema.parse({
+        botTokenEnv: 'MY_BOT_TOKEN',
+        allowedUserIds: [123456789, 987654321],
+        defaultChatId: -1001234567890,
+      });
+      expect(telegram.botTokenEnv).toBe('MY_BOT_TOKEN');
+      expect(telegram.allowedUserIds).toEqual([123456789, 987654321]);
+      expect(telegram.defaultChatId).toBe(-1001234567890);
+    });
+
+    it('TelegramRemoteConfigSchema accepts string defaultChatId', () => {
+      const telegram = TelegramRemoteConfigSchema.parse({
+        defaultChatId: '@my_channel',
+      });
+      expect(telegram.defaultChatId).toBe('@my_channel');
+    });
+
+    it('TelegramRemoteConfigSchema rejects non-integer allowedUserIds', () => {
+      expect(() =>
+        TelegramRemoteConfigSchema.parse({ allowedUserIds: [12.34] })
+      ).toThrow(ZodError);
+    });
+
+    it('RemoteControlConfigSchema applies defaults', () => {
+      const remote = RemoteControlConfigSchema.parse({});
+      expect(remote.enabled).toBe(false);
+      expect(remote.provider).toBe('telegram');
+      expect(remote.telegram).toEqual({
+        botTokenEnv: 'TELEGRAM_BOT_TOKEN',
+        notifications: {
+          needsInfo: true,
+          quotaPaused: true,
+          taskCompleted: true,
+          specCompleted: true,
+        },
+      });
+    });
+
+    it('RemoteControlConfigSchema accepts supported providers (telegram, slack, discord)', () => {
+      for (const provider of ['telegram', 'slack', 'discord'] as const) {
+        const remote = RemoteControlConfigSchema.parse({ provider });
+        expect(remote.provider).toBe(provider);
+      }
+    });
+
+    it('RemoteControlConfigSchema rejects unsupported providers', () => {
+      expect(() =>
+        RemoteControlConfigSchema.parse({ provider: 'unsupported' })
+      ).toThrow(ZodError);
+    });
+
+    it('AutoPilotConfigSchema populates defaults when remote is empty or partially specified', () => {
+      const config1 = AutoPilotConfigSchema.parse({ remote: {} });
+      expect(config1.remote.enabled).toBe(false);
+      expect(config1.remote.provider).toBe('telegram');
+
+      const config2 = AutoPilotConfigSchema.parse({
+        remote: {
+          enabled: true,
+          telegram: {
+            allowedUserIds: [111, 222],
+          },
+        },
+      });
+      expect(config2.remote.enabled).toBe(true);
+      expect(config2.remote.provider).toBe('telegram');
+      expect(config2.remote.telegram.botTokenEnv).toBe('TELEGRAM_BOT_TOKEN');
+      expect(config2.remote.telegram.allowedUserIds).toEqual([111, 222]);
+      expect(config2.remote.telegram.notifications.needsInfo).toBe(true);
     });
   });
 
