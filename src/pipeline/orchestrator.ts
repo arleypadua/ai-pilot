@@ -13,7 +13,13 @@ import { AgentEventBus } from '../events/bus.js';
 import { resolveTelegramCredentials } from '../config/credentials.js';
 import { TelegramRemoteProvider } from '../remote/telegram.js';
 import { RemoteControlManager } from '../remote/manager.js';
-import type { RemoteActionController } from '../remote/types.js';
+import type {
+  RemoteActionController,
+  StatusSummary,
+  TasksSummary,
+  SpecsSummary,
+  TaskItemSummary,
+} from '../remote/types.js';
 
 export class Orchestrator implements RemoteActionController {
   private config: AutoPilotConfig;
@@ -644,18 +650,19 @@ ${autoMergeStep}
       }
 
       // Case D: Runner turn timed out (Solution 1: Auto-Resume on Timeout)
-      const maxNudges = this.config.maxAutoNudges ?? 2;
-      if (autoNudgeCount < maxNudges) {
-        this.dashboard.log(
-          `Issue #${issue.number}: Agent turn timed out. Automatically resuming task with continuation prompt (attempt ${autoNudgeCount + 1}/${maxNudges})...`
-        );
+      if (runnerRes.status === 'TIMED_OUT' || runnerRes.isTimeout) {
+        const maxNudges = this.config.maxAutoNudges ?? 2;
+        if (autoNudgeCount < maxNudges) {
+          this.dashboard.log(
+            `Issue #${issue.number}: Agent turn timed out. Automatically resuming task with continuation prompt (attempt ${autoNudgeCount + 1}/${maxNudges})...`
+          );
 
-        const mergeMethod = this.config.mergeMethod || 'squash';
-        const autoMergeStep = this.config.autoMerge
-          ? `4. Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
-          : `4. Keep the Pull Request open for human review (do not auto-merge).`;
+          const mergeMethod = this.config.mergeMethod || 'squash';
+          const autoMergeStep = this.config.autoMerge
+            ? `4. Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
+            : `4. Keep the Pull Request open for human review (do not auto-merge).`;
 
-        const timeoutPrompt = `Your previous execution turn timed out while running.
+          const timeoutPrompt = `Your previous execution turn timed out while running.
 
 Please inspect the existing worktree to see what was already implemented, avoid repeating already-completed work or tests, and continue implementation to completion:
 1. Review modified files and current progress in the worktree.
@@ -666,34 +673,35 @@ Please inspect the existing worktree to see what was already implemented, avoid 
 ${autoMergeStep}
 6. If blocked or clarification is needed, comment on the issue and label \`ready-for-human\`.`;
 
-        this.stateMgr.recordTaskStage(
-          issue.number,
-          'AUTO_RESUME_TIMEOUT',
-          'running',
-          `Auto-resuming timed-out agent turn (attempt ${autoNudgeCount + 1}/${maxNudges})`
-        );
+          this.stateMgr.recordTaskStage(
+            issue.number,
+            'AUTO_RESUME_TIMEOUT',
+            'running',
+            `Auto-resuming timed-out agent turn (attempt ${autoNudgeCount + 1}/${maxNudges})`
+          );
 
-        return this.executeTask(node, timeoutPrompt, autoNudgeCount + 1, failureRetryCount);
+          return this.executeTask(node, timeoutPrompt, autoNudgeCount + 1, failureRetryCount);
+        }
+
+        // Exhausted timeout auto-resumes
+        try {
+          await this.gh.editIssueLabels(issue.number, {
+            add: [this.config.labels.readyForHuman],
+            remove: [this.config.labels.readyForAgent],
+          });
+          await this.gh.addComment(
+            issue.number,
+            `⚠️ **Agent Execution Timed Out**\n\nThe agent turn timed out after ${maxNudges} follow-up continuation attempts.\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
+          );
+        } catch {
+          // Best effort
+        }
+
+        this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
+        this.dashboard.log(`Issue #${issue.number} marked ready-for-human (timed out after ${maxNudges} attempts).`);
+        Notifier.notifyNeedsFeedback(issue.number, issue.title, `Agent timed out after ${maxNudges} attempts`, undefined, undefined, issue.url);
+        return;
       }
-
-      // Exhausted timeout auto-resumes
-      try {
-        await this.gh.editIssueLabels(issue.number, {
-          add: [this.config.labels.readyForHuman],
-          remove: [this.config.labels.readyForAgent],
-        });
-        await this.gh.addComment(
-          issue.number,
-          `⚠️ **Agent Execution Timed Out**\n\nThe agent turn timed out after ${maxNudges} follow-up continuation attempts.\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
-        );
-      } catch {
-        // Best effort
-      }
-
-      this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
-      this.dashboard.log(`Issue #${issue.number} marked ready-for-human (timed out after ${maxNudges} attempts).`);
-      Notifier.notifyNeedsFeedback(issue.number, issue.title, `Agent timed out after ${maxNudges} attempts`, undefined, undefined, issue.url);
-      return;
 
       // Case E: Runner failed / error (Solution 3: Transient Failure Retry Policy)
       const maxRetries = this.config.maxRetriesOnFailure ?? this.config.maxAutoRetries ?? 2;
@@ -937,20 +945,137 @@ ${autoMergeStep}
     this.dashboard.log(`Quota resumed by developer${runnerStr}. Resuming workers.`);
   }
 
-  public async pauseTask(issueNumber: number): Promise<void> {
-    await this.pauseWorker(issueNumber);
+  public pauseDispatching(): { success: boolean; message: string } {
+    this.isSessionStarted = false;
+    this.stateMgr.updateDaemonStatus('idle');
+    this.dashboard.log('Task dispatching paused by developer.');
+    return { success: true, message: 'Task dispatching paused.' };
   }
 
-  public async resumeTask(issueNumber: number): Promise<void> {
-    await this.resumeWorker(issueNumber);
+  public resumeDispatching(): { success: boolean; message: string } {
+    this.isSessionStarted = true;
+    this.stateMgr.updateDaemonStatus('running');
+    this.dashboard.log('Task dispatching resumed by developer.');
+    this.tick().catch(() => {});
+    return { success: true, message: 'Task dispatching resumed.' };
   }
 
-  public getStatusSummary(): unknown {
+  public isDispatchingPaused(): boolean {
+    return !this.isSessionStarted;
+  }
+
+  public async pauseTask(issueNumber: number): Promise<{ success: boolean; message: string }> {
+    return await this.pauseWorker(issueNumber);
+  }
+
+  public async resumeTask(issueNumber: number): Promise<{ success: boolean; message: string }> {
+    return await this.resumeWorker(issueNumber);
+  }
+
+  public getStatusSummary(): StatusSummary {
+    const activeWorkersMap = this.dashboard.getActiveWorkers();
+    const activeWorkersList = Array.from(activeWorkersMap.values()).map((w) => ({
+      issueNumber: w.issueNumber,
+      title: w.title,
+      branchName: w.branchName,
+      status: w.status,
+      runnerName: w.runnerName,
+      startedAt: w.startedAt,
+    }));
+
+    const allNodes = this.dag.getAllNodes();
+    const specNodes = allNodes.filter((n) => n.kind === 'spec');
+    const allSpecs = specNodes.map((s) => {
+      const specInfo = this.dag.isSpecComplete(s.issue.number);
+      return {
+        number: s.issue.number,
+        title: s.issue.title,
+        isComplete: specInfo.isComplete,
+        totalTickets: specInfo.totalTickets,
+        completedTickets: specInfo.completedTickets,
+        state: s.issue.state,
+      };
+    });
+
+    const daemonStatus = this.stateMgr.getDaemonStatus();
+
     return {
-      status: this.stateMgr.getDaemonStatus(),
+      daemonStatus,
+      status: daemonStatus,
+      isSessionStarted: this.isSessionStarted,
+      isDispatchingPaused: !this.isSessionStarted,
+      activeWorkerCount: this.activeTaskNumbers.size,
+      maxConcurrency: this.config.maxConcurrency,
+      activeWorkers: activeWorkersList,
       activeTasks: Array.from(this.activeTaskNumbers),
+      activeWorktrees: this.latestActiveWorktrees,
       targetSpecs: this.dag.getTargetSpecs(),
-      workers: Array.from(this.dashboard.getActiveWorkers().values()),
+      quota: this.quotaMonitor.getStatus(),
+      workers: activeWorkersList,
+      allSpecs,
+    } as any;
+  }
+
+  public getTasksSummary(): TasksSummary {
+    const activeWorkers = Array.from(this.dashboard.getActiveWorkers().values());
+    const inProgress: TaskItemSummary[] = [];
+    const paused: TaskItemSummary[] = [];
+
+    for (const worker of activeWorkers) {
+      const item: TaskItemSummary = {
+        issueNumber: worker.issueNumber,
+        title: worker.title,
+        branchName: worker.branchName,
+        runnerName: worker.runnerName,
+        status: worker.status,
+        startedAt: worker.startedAt,
+      };
+      if (
+        worker.status === 'paused_quota' ||
+        (this.quotaMonitor && worker.runnerName && this.quotaMonitor.isRunnerPaused(worker.runnerName))
+      ) {
+        paused.push(item);
+      } else {
+        inProgress.push(item);
+      }
+    }
+
+    const readyNodes = this.dag.getReadyNodes();
+    const activeIds = new Set(this.activeTaskNumbers);
+    const queued: TaskItemSummary[] = readyNodes
+      .filter((n) => !activeIds.has(n.issue.number))
+      .map((n) => ({
+        issueNumber: n.issue.number,
+        title: n.issue.title,
+        runnerName: n.runnerName,
+        status: 'ready',
+      }));
+
+    return {
+      inProgress,
+      paused,
+      queued,
+    };
+  }
+
+  public getSpecsSummary(): SpecsSummary {
+    const allNodes = this.dag.getAllNodes();
+    const specNodes = allNodes.filter((n) => n.kind === 'spec');
+    const specs = specNodes.map((s) => {
+      const info = this.dag.isSpecComplete(s.issue.number);
+      return {
+        number: s.issue.number,
+        title: s.issue.title,
+        isComplete: info.isComplete,
+        totalTickets: info.totalTickets,
+        completedTickets: info.completedTickets,
+        state: s.issue.state,
+      };
+    });
+
+    return {
+      targetSpecs: this.dag.getTargetSpecs(),
+      specs,
     };
   }
 }

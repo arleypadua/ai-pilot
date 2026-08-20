@@ -158,16 +158,19 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
 
   public onCommand(
     command: string,
-    handler: (args: string[], userId: number) => Promise<void>
+    handler: (args: string[], userId: number, context?: ActionContext) => Promise<void>
   ): void {
     const cleanCommand = command.replace(/^\//, '');
-    this.commandHandlers.set(cleanCommand, handler);
+    this.commandHandlers.set(cleanCommand, handler as any);
     this.bot.command(cleanCommand, async (ctx: Context) => {
       const userId = ctx.from?.id;
       if (userId === undefined) return;
       const match = ctx.match;
       const args = typeof match === 'string' && match.trim() ? match.trim().split(/\s+/) : [];
-      await handler(args, userId);
+      const chatId = ctx.chat?.id ?? this.defaultChatId;
+      const messageId = ctx.message?.message_id;
+      const context: ActionContext = { chatId, messageId };
+      await handler(args, userId, context);
     });
   }
 

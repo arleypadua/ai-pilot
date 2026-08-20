@@ -35,16 +35,85 @@ export interface RemoteControlProvider {
     handler: (action: string, payload: string, userId: number, context?: ActionContext) => Promise<void>
   ): void;
   onTextReply?(handler: (replyToMessageId: number, text: string, userId: number) => Promise<void>): void;
-  onCommand?(command: string, handler: (args: string[], userId: number) => Promise<void>): void;
+  onCommand?(
+    command: string,
+    handler: (args: string[], userId: number, context?: ActionContext) => Promise<void>
+  ): void;
+  getAllowedUserIds?(): number[] | undefined;
+}
+
+export interface TaskItemSummary {
+  issueNumber: number;
+  title: string;
+  branchName?: string;
+  runnerName?: string;
+  status: string;
+  startedAt?: Date;
+}
+
+export interface TasksSummary {
+  inProgress: TaskItemSummary[];
+  paused: TaskItemSummary[];
+  queued: TaskItemSummary[];
+}
+
+export interface SpecItemSummary {
+  number: number;
+  title: string;
+  isComplete: boolean;
+  totalTickets: number;
+  completedTickets: number;
+  state?: string;
+}
+
+export interface SpecsSummary {
+  targetSpecs: number[];
+  specs: SpecItemSummary[];
+}
+
+export interface SecurityStatusInfo {
+  userId: number;
+  isAuthorized: boolean;
+  whitelistStatus: string;
+  allowedUserCount?: number;
+}
+
+export interface StatusSummary {
+  daemonStatus: 'idle' | 'running' | 'paused_quota';
+  status: 'idle' | 'running' | 'paused_quota';
+  isSessionStarted: boolean;
+  isDispatchingPaused?: boolean;
+  activeWorkerCount: number;
+  maxConcurrency: number;
+  activeWorkers: Array<{
+    issueNumber: number;
+    title: string;
+    branchName: string;
+    status: string;
+    runnerName?: string;
+    startedAt?: Date;
+  }>;
+  activeWorktrees: Array<{
+    path: string;
+    branch: string;
+    issueNumber?: number;
+  }>;
+  targetSpecs: number[];
+  quota: any;
+  allSpecs?: SpecItemSummary[];
 }
 
 export interface RemoteActionController {
   replyToNeedsInfo(issueNumber: number, answer: string): Promise<void>;
   resumeQuota(runner?: string): void;
-  pauseTask(issueNumber: number): Promise<void>;
-  resumeTask(issueNumber: number): Promise<void>;
+  pauseTask(issueNumber: number): Promise<{ success: boolean; message: string } | void>;
+  resumeTask(issueNumber: number): Promise<{ success: boolean; message: string } | void>;
+  pauseDispatching?(): { success: boolean; message: string };
+  resumeDispatching?(): { success: boolean; message: string };
   setTargetSpecs(specs: number[]): void;
   getStatusSummary(): unknown;
+  getTasksSummary?(): TasksSummary;
+  getSpecsSummary?(): SpecsSummary;
 }
 
 export interface TaskStartedNotificationPayload {

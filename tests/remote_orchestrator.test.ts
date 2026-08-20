@@ -160,4 +160,29 @@ describe('Orchestrator RemoteActionController & Quota Resumption', () => {
 
     await manager.stop();
   });
+
+  it('toggles task dispatching via pauseDispatching() and resumeDispatching()', () => {
+    expect(orchestrator.isDispatchingPaused()).toBe(false);
+
+    const pauseRes = orchestrator.pauseDispatching();
+    expect(pauseRes.success).toBe(true);
+    expect(orchestrator.isDispatchingPaused()).toBe(true);
+
+    const resumeRes = orchestrator.resumeDispatching();
+    expect(resumeRes.success).toBe(true);
+    expect(orchestrator.isDispatchingPaused()).toBe(false);
+  });
+
+  it('provides getTasksSummary() and getSpecsSummary()', () => {
+    const tasks = orchestrator.getTasksSummary();
+    expect(tasks).toBeDefined();
+    expect(Array.isArray(tasks.inProgress)).toBe(true);
+    expect(Array.isArray(tasks.paused)).toBe(true);
+    expect(Array.isArray(tasks.queued)).toBe(true);
+
+    const specs = orchestrator.getSpecsSummary();
+    expect(specs).toBeDefined();
+    expect(Array.isArray(specs.targetSpecs)).toBe(true);
+    expect(Array.isArray(specs.specs)).toBe(true);
+  });
 });
