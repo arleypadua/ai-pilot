@@ -75,6 +75,20 @@ export interface NeedsInfoNotificationPayload {
   question?: string;
   prNumber?: number;
   prUrl?: string;
+  issueUrl?: string;
+  choices?: string[];
+}
+
+export interface ActiveNeedsInfoRecord {
+  issueNumber: number;
+  messageId: number;
+  chatId?: number | string;
+  payload: NeedsInfoNotificationPayload;
+  choices: string[];
+  originalText: string;
+  answered: boolean;
+  selectedAnswer?: string;
+  createdAt: number;
 }
 
 export interface QuotaPausedNotificationPayload {

@@ -245,6 +245,8 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
         }
       }
       extra.reply_markup = keyboard;
+    } else if (options?.actions && options.actions.length === 0) {
+      extra.reply_markup = { inline_keyboard: [] };
     }
 
     await this.rateLimiter.enqueue(targetChatId, () =>

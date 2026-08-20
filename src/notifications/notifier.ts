@@ -42,7 +42,9 @@ export class Notifier {
     issueTitle: string,
     question?: string,
     prUrl?: string,
-    prNumber?: number
+    prNumber?: number,
+    issueUrl?: string,
+    choices?: string[]
   ): void {
     console.log(pc.yellow(`\n🔔 [Human Feedback Required] Issue #${issueNumber}: ${issueTitle}`));
     if (question) {
@@ -54,6 +56,8 @@ export class Notifier {
       question,
       prUrl,
       prNumber,
+      issueUrl,
+      choices,
     };
     Notifier.emitter.emit('needs_info', payload);
   }
@@ -63,9 +67,11 @@ export class Notifier {
     issueTitle: string,
     question?: string,
     prUrl?: string,
-    prNumber?: number
+    prNumber?: number,
+    issueUrl?: string,
+    choices?: string[]
   ): void {
-    this.notifyTaskNeedsFeedback(issueNumber, issueTitle, question, prUrl, prNumber);
+    this.notifyTaskNeedsFeedback(issueNumber, issueTitle, question, prUrl, prNumber, issueUrl, choices);
   }
 
   public static notifySpecComplete(specNumber: number, specTitle: string): void {

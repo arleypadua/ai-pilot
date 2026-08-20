@@ -19,6 +19,7 @@ class MockRemoteProvider implements RemoteControlProvider {
     string,
     (action: string, payload: string, userId: number, context?: ActionContext) => Promise<void>
   > = new Map();
+  public textReplyHandlers: Array<(replyToMessageId: number, text: string, userId: number) => Promise<void>> = [];
 
   public async start(): Promise<void> {
     this.isStarted = true;
@@ -51,6 +52,12 @@ class MockRemoteProvider implements RemoteControlProvider {
     this.actionHandlers.set(actionPrefix, handler);
   }
 
+  public onTextReply(
+    handler: (replyToMessageId: number, text: string, userId: number) => Promise<void>
+  ): void {
+    this.textReplyHandlers.push(handler);
+  }
+
   public async triggerAction(
     payload: string,
     userId: number = 123,
@@ -59,7 +66,18 @@ class MockRemoteProvider implements RemoteControlProvider {
     for (const [prefix, handler] of this.actionHandlers.entries()) {
       if (payload.startsWith(prefix)) {
         await handler(prefix, payload, userId, context);
+        break;
       }
+    }
+  }
+
+  public async triggerTextReply(
+    replyToMessageId: number,
+    text: string,
+    userId: number = 12345
+  ): Promise<void> {
+    for (const handler of this.textReplyHandlers) {
+      await handler(replyToMessageId, text, userId);
     }
   }
 }
@@ -68,7 +86,7 @@ class MockActionController implements RemoteActionController {
   public resumedRunners: Array<string | undefined> = [];
   public pausedTasks: number[] = [];
   public resumedTasks: number[] = [];
-  public replies: Array<{ issueNumber: number; answer: string }> = [];
+  public repliedNeedsInfo: Array<{ issueNumber: number; answer: string }> = [];
   public targetSpecs: number[][] = [];
 
   public resumeQuota(runner?: string): void {
@@ -84,7 +102,7 @@ class MockActionController implements RemoteActionController {
   }
 
   public async replyToNeedsInfo(issueNumber: number, answer: string): Promise<void> {
-    this.replies.push({ issueNumber, answer });
+    this.repliedNeedsInfo.push({ issueNumber, answer });
   }
 
   public setTargetSpecs(specs: number[]): void {
@@ -92,7 +110,7 @@ class MockActionController implements RemoteActionController {
   }
 
   public getStatusSummary(): unknown {
-    return { mock: true };
+    return { status: 'running' };
   }
 }
 
@@ -367,31 +385,147 @@ describe('RemoteControlManager', () => {
     expect(provider.sentMessages.length).toBe(1); // No new message sent
   });
 
-  it('provides direct notification methods (sendTaskStarted, sendNeedsInfo, etc.)', async () => {
-    manager = new RemoteControlManager({
-      provider,
-      repository: 'arleypadua/imagos',
-      defaultChatId: 999,
+  describe('needs-info dual-mode interactive steering', () => {
+    it('automatically parses multiple-choice options and includes GitHub link button', async () => {
+      manager = new RemoteControlManager({
+        provider,
+        repository: 'arleypadua/imagos',
+        defaultChatId: 123456,
+        actionController,
+      });
+
+      await manager.start();
+
+      const question = `Which runner strategy should we use for this task?
+1. Claude 3.7 Sonnet
+2. Antigravity Agent (AGY)
+3. Fallback Hybrid`;
+
+      Notifier.notifyNeedsFeedback(
+        26,
+        'feat: remote needs-info steering',
+        question,
+        'https://github.com/arleypadua/imagos/pull/35',
+        35
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.text).toContain('Which runner strategy should we use for this task?');
+      expect(msg.options?.actions).toBeDefined();
+
+      const actions = msg.options!.actions!;
+      // 3 choice buttons + 1 GitHub PR link button
+      expect(actions.length).toBe(4);
+      expect(actions[0][0].label).toBe('Claude 3.7 Sonnet');
+      expect(actions[0][0].payload).toBe('v1:inf:26:0');
+      expect(actions[1][0].label).toBe('Antigravity Agent (AGY)');
+      expect(actions[1][0].payload).toBe('v1:inf:26:1');
+      expect(actions[2][0].label).toBe('Fallback Hybrid');
+      expect(actions[2][0].payload).toBe('v1:inf:26:2');
+      expect(actions[3][0].label).toBe('🔗 Open on GitHub');
+      expect(actions[3][0].url).toBe('https://github.com/arleypadua/imagos/pull/35');
     });
 
-    await manager.sendNeedsInfo(
-      {
-        issueNumber: 50,
-        issueTitle: 'Need config clarification',
-        question: 'What is the default port?',
-      },
-      {
-        actions: [
-          [
-            { id: 'opt1', label: 'Port 8080', payload: 'v1:inf:50:8080' },
-            { id: 'opt2', label: 'Port 9876', payload: 'v1:inf:50:9876' },
-          ],
-        ],
-      }
-    );
+    it('handles option button click: acknowledges query, edits message with selection, removes buttons, and invokes actionController', async () => {
+      manager = new RemoteControlManager({
+        provider,
+        repository: 'arleypadua/imagos',
+        defaultChatId: 123456,
+        actionController,
+      });
 
-    expect(provider.sentMessages.length).toBe(1);
-    expect(provider.sentMessages[0].options?.actions).toBeDefined();
-    expect(provider.sentMessages[0].options?.actions?.[0][0].label).toBe('Port 8080');
+      await manager.start();
+
+      const question = `Which database should we use?
+1. PostgreSQL
+2. SQLite`;
+
+      Notifier.notifyNeedsFeedback(26, 'feat: db migration', question);
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Trigger button click on option 0 (PostgreSQL)
+      await provider.triggerAction('v1:inf:26:0', 999);
+
+      // Verify actionController received reply
+      expect(actionController.repliedNeedsInfo.length).toBe(1);
+      expect(actionController.repliedNeedsInfo[0]).toEqual({
+        issueNumber: 26,
+        answer: 'PostgreSQL',
+      });
+
+      // Verify message was edited to show selected choice and remove buttons
+      expect(provider.editedMessages.length).toBe(1);
+      const edited = provider.editedMessages[0];
+      expect(edited.messageId).toBe(1);
+      expect(edited.text).toContain('✅ *Answered* (via button): PostgreSQL');
+      expect(edited.options?.actions).toEqual([]);
+
+      // Second click on the same issue is ignored (locked message)
+      await provider.triggerAction('v1:inf:26:1', 999);
+      expect(actionController.repliedNeedsInfo.length).toBe(1);
+      expect(provider.editedMessages.length).toBe(1);
+    });
+
+    it('handles swipe-to-reply text response: maps message ID to issue, edits message with reply, removes buttons, and invokes actionController', async () => {
+      manager = new RemoteControlManager({
+        provider,
+        repository: 'arleypadua/imagos',
+        defaultChatId: 123456,
+        actionController,
+      });
+
+      await manager.start();
+
+      Notifier.notifyNeedsFeedback(
+        42,
+        'feat: custom configuration',
+        'What should the port number and timeout be?'
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      const messageId = provider.sentMessages.length; // Message ID is 1
+
+      // Developer swipes to reply to messageId 1
+      await provider.triggerTextReply(messageId, 'Use port 8080 and 30s timeout', 999);
+
+      // Verify actionController received reply
+      expect(actionController.repliedNeedsInfo.length).toBe(1);
+      expect(actionController.repliedNeedsInfo[0]).toEqual({
+        issueNumber: 42,
+        answer: 'Use port 8080 and 30s timeout',
+      });
+
+      // Verify message was edited to show text reply and lock buttons
+      expect(provider.editedMessages.length).toBe(1);
+      const edited = provider.editedMessages[0];
+      expect(edited.messageId).toBe(messageId);
+      expect(edited.text).toContain('✅ *Answered* (via text): Use port 8080 and 30s timeout');
+      expect(edited.options?.actions).toEqual([]);
+
+      // Second reply to the same message is ignored
+      await provider.triggerTextReply(messageId, 'Another reply', 999);
+      expect(actionController.repliedNeedsInfo.length).toBe(1);
+      expect(provider.editedMessages.length).toBe(1);
+    });
+
+    it('ignores text replies to unknown message IDs', async () => {
+      manager = new RemoteControlManager({
+        provider,
+        repository: 'arleypadua/imagos',
+        defaultChatId: 123456,
+        actionController,
+      });
+
+      await manager.start();
+
+      // Swipe to reply to an unknown message ID (e.g. 9999)
+      await provider.triggerTextReply(9999, 'Some reply', 123);
+
+      expect(actionController.repliedNeedsInfo.length).toBe(0);
+      expect(provider.editedMessages.length).toBe(0);
+    });
   });
 });
+
