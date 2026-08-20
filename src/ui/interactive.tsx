@@ -12,14 +12,14 @@ export interface InteractiveDashboardInstance {
 
 export function startInteractiveDashboard(
   orchestrator: Orchestrator,
-  onExitCallback?: () => void
+  onExitCallback?: () => void | Promise<void>
 ): InteractiveDashboardInstance {
   orchestrator.setInteractive(true);
   Notifier.setInteractive(true);
   Notifier.setLogHandler((msg) => orchestrator.getDashboard().log(msg));
 
   let isExiting = false;
-  const handleExit = () => {
+  const handleExit = async () => {
     if (isExiting) return;
     isExiting = true;
     Notifier.setInteractive(false);
@@ -28,10 +28,10 @@ export function startInteractiveDashboard(
       instance.unmount();
     } catch {}
     try {
-      orchestrator.stop();
+      await orchestrator.stop();
     } catch {}
     if (onExitCallback) {
-      onExitCallback();
+      await onExitCallback();
     } else {
       process.exit(0);
     }
