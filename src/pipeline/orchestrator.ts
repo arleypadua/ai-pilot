@@ -1,28 +1,31 @@
-import fs from 'node:fs';
-import { execa } from 'execa';
-import type { AutoPilotConfig, DAGNode, ProviderInfo } from '../types/index.js';
-import { GitHubClient } from '../github/client.js';
-import { IssueDAG } from '../github/dag.js';
-import { WorktreeManager } from '../worktree/manager.js';
-import { QuotaMonitor } from '../quota/monitor.js';
-import { RunnerRegistry, detectInstalledProviders } from '../runners/registry.js';
-import { RunnerFacade } from '../runners/facade.js';
-import { Notifier } from '../notifications/notifier.js';
-import { ActivityLogger } from '../logger/index.js';
-import { Dashboard } from '../ui/dashboard.js';
-import { StateManager } from '../state/manager.js';
-import { AgentEventBus } from '../events/bus.js';
-import { resolveTelegramCredentials } from '../config/credentials.js';
-import { saveConfig } from '../config/schema.js';
-import { TelegramRemoteProvider } from '../remote/telegram.js';
-import { RemoteControlManager } from '../remote/manager.js';
+import fs from "node:fs";
+import { execa } from "execa";
+import type { AutoPilotConfig, DAGNode, ProviderInfo } from "../types/index.js";
+import { GitHubClient } from "../github/client.js";
+import { IssueDAG } from "../github/dag.js";
+import { WorktreeManager } from "../worktree/manager.js";
+import { QuotaMonitor } from "../quota/monitor.js";
+import {
+  RunnerRegistry,
+  detectInstalledProviders,
+} from "../runners/registry.js";
+import { RunnerFacade } from "../runners/facade.js";
+import { Notifier } from "../notifications/notifier.js";
+import { ActivityLogger } from "../logger/index.js";
+import { Dashboard } from "../ui/dashboard.js";
+import { StateManager } from "../state/manager.js";
+import { AgentEventBus } from "../events/bus.js";
+import { resolveTelegramCredentials } from "../config/credentials.js";
+import { saveConfig } from "../config/schema.js";
+import { TelegramRemoteProvider } from "../remote/telegram.js";
+import { RemoteControlManager } from "../remote/manager.js";
 import type {
   RemoteActionController,
   StatusSummary,
   TasksSummary,
   SpecsSummary,
   TaskItemSummary,
-} from '../remote/types.js';
+} from "../remote/types.js";
 
 export class Orchestrator implements RemoteActionController {
   private config: AutoPilotConfig;
@@ -43,7 +46,11 @@ export class Orchestrator implements RemoteActionController {
   private lastKnownFeedbackQuestions: Map<number, string> = new Map();
   private notifiedSpecCompletions: Set<number> = new Set();
   private tickListeners: Array<() => void> = [];
-  private latestActiveWorktrees: Array<{ path: string; branch: string; issueNumber?: number }> = [];
+  private latestActiveWorktrees: Array<{
+    path: string;
+    branch: string;
+    issueNumber?: number;
+  }> = [];
   private isSessionStarted: boolean = true;
 
   constructor(config: AutoPilotConfig) {
@@ -84,18 +91,22 @@ export class Orchestrator implements RemoteActionController {
             provider,
             repository: this.config.repository,
             defaultChatId: creds.defaultChatId,
-            notifications: this.config.remote?.telegram?.notifications ?? this.config.telegram?.notifications,
+            notifications:
+              this.config.remote?.telegram?.notifications ??
+              this.config.telegram?.notifications,
             eventBus: this.eventBus,
             actionController: this,
             quotaMonitor: this.quotaMonitor,
           });
         } else {
           this.dashboard.log(
-            'Remote control is enabled, but no Telegram bot token was found in .env, ~/.imagos/credentials.json, or TELEGRAM_BOT_TOKEN.'
+            "Remote control is enabled, but no Telegram bot token was found in .env, ~/.imagos/credentials.json, or TELEGRAM_BOT_TOKEN.",
           );
         }
       } catch (err: any) {
-        this.dashboard.log(`Failed to initialize remote control provider: ${err.message}`);
+        this.dashboard.log(
+          `Failed to initialize remote control provider: ${err.message}`,
+        );
         throw err;
       }
     }
@@ -104,22 +115,25 @@ export class Orchestrator implements RemoteActionController {
     this.isSessionStarted = true;
 
     // Setup quota event listeners
-    this.quotaMonitor.on('quota_paused', ({ resetAt, waitMs, runnerName }) => {
+    this.quotaMonitor.on("quota_paused", ({ resetAt, waitMs, runnerName }) => {
       const waitMinutes = Math.ceil(waitMs / (60 * 1000));
-      this.stateMgr.updateDaemonStatus('paused_quota', resetAt.toISOString());
+      this.stateMgr.updateDaemonStatus("paused_quota", resetAt.toISOString());
       Notifier.notifyQuotaPaused(resetAt, waitMinutes, runnerName);
-      const runnerStr = runnerName ? ` [${runnerName}]` : '';
-      this.dashboard.log(`5h Quota limit hit${runnerStr}. Suspended workers until ${resetAt.toLocaleTimeString()}`);
+      const runnerStr = runnerName ? ` [${runnerName}]` : "";
+      this.dashboard.log(
+        `5h Quota limit hit${runnerStr}. Suspended workers until ${resetAt.toLocaleTimeString()}`,
+      );
     });
 
-    this.quotaMonitor.on('quota_resumed', ({ runnerName }) => {
-      this.stateMgr.updateDaemonStatus('running');
+    this.quotaMonitor.on("quota_resumed", ({ runnerName }) => {
+      this.stateMgr.updateDaemonStatus("running");
       Notifier.notifyQuotaResumed(runnerName);
-      const runnerStr = runnerName ? ` for ${runnerName}` : '';
-      this.dashboard.log(`Quota reset window reached. Resuming workers${runnerStr}.`);
+      const runnerStr = runnerName ? ` for ${runnerName}` : "";
+      this.dashboard.log(
+        `Quota reset window reached. Resuming workers${runnerStr}.`,
+      );
     });
   }
-
 
   public setInteractive(interactive: boolean): void {
     this.isInteractive = interactive;
@@ -147,8 +161,10 @@ export class Orchestrator implements RemoteActionController {
     this.dag.setTargetSpecs(specs);
     this.dashboard.log(
       specs.length > 0
-        ? `Target scope updated to Spec(s): ${specs.map((s) => `#${s}`).join(', ')}`
-        : 'Target scope updated to any unblocked task (all specs).'
+        ? `Target scope updated to Spec(s): ${specs
+            .map((s) => `#${s}`)
+            .join(", ")}`
+        : "Target scope updated to any unblocked task (all specs).",
     );
     this.tick().catch(() => {});
   }
@@ -158,18 +174,21 @@ export class Orchestrator implements RemoteActionController {
       this.setTargetSpecs(specs);
     }
     this.isSessionStarted = true;
-    this.stateMgr.updateDaemonStatus('running');
-    return { success: true, message: 'Target spec scope updated successfully.' };
+    this.stateMgr.updateDaemonStatus("running");
+    return {
+      success: true,
+      message: "Target spec scope updated successfully.",
+    };
   }
 
   public async start(): Promise<void> {
     this.isRunning = true;
-    this.stateMgr.updateDaemonStatus('running');
+    this.stateMgr.updateDaemonStatus("running");
 
     if (this.remoteManager) {
       try {
         await this.remoteManager.start();
-        this.dashboard.log('Remote control bot started.');
+        this.dashboard.log("Remote control bot started.");
       } catch (err: any) {
         this.dashboard.log(`Remote control bot start warning: ${err.message}`);
       }
@@ -177,15 +196,23 @@ export class Orchestrator implements RemoteActionController {
 
     const targetSpecs = this.dag.getTargetSpecs();
     if (targetSpecs.length > 0) {
-      this.dashboard.log(`Agent Auto-Pilot started (scoped to Spec(s): ${targetSpecs.map((s) => `#${s}`).join(', ')})`);
+      this.dashboard.log(
+        `Agent Auto-Pilot started (scoped to Spec(s): ${targetSpecs
+          .map((s) => `#${s}`)
+          .join(", ")})`,
+      );
     } else {
-      this.dashboard.log('Agent Auto-Pilot started (resolving across any unblocked tasks).');
+      this.dashboard.log(
+        "Agent Auto-Pilot started (resolving across any unblocked tasks).",
+      );
     }
 
     // Check GitHub Auth
     const isAuthed = await this.gh.checkAuth();
     if (!isAuthed) {
-      throw new Error('gh CLI is not authenticated. Please run `gh auth login` first.');
+      throw new Error(
+        "gh CLI is not authenticated. Please run `gh auth login` first.",
+      );
     }
 
     // Initial fetch of Claude live usage from /usage
@@ -206,7 +233,7 @@ export class Orchestrator implements RemoteActionController {
 
   public async stop(): Promise<void> {
     this.isRunning = false;
-    this.stateMgr.updateDaemonStatus('idle');
+    this.stateMgr.updateDaemonStatus("idle");
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
@@ -218,13 +245,12 @@ export class Orchestrator implements RemoteActionController {
         this.dashboard.log(`Remote control stop warning: ${err.message}`);
       }
     }
-    this.dashboard.log('Agent Auto-Pilot stopped.');
+    this.dashboard.log("Agent Auto-Pilot stopped.");
   }
 
   public getRemoteManager(): RemoteControlManager | undefined {
     return this.remoteManager;
   }
-
 
   public async tick(): Promise<void> {
     // 0. Fetch live Claude telemetry (/usage)
@@ -238,7 +264,11 @@ export class Orchestrator implements RemoteActionController {
     this.latestActiveWorktrees = await this.worktreeMgr.listActiveWorktrees();
     const activeWorktrees = this.latestActiveWorktrees;
     if (!this.isInteractive) {
-      this.dashboard.render(this.dag, this.quotaMonitor.getStatus(), activeWorktrees);
+      this.dashboard.render(
+        this.dag,
+        this.quotaMonitor.getStatus(),
+        activeWorktrees,
+      );
     }
 
     // Notify tick listeners (for React Ink UI)
@@ -255,22 +285,28 @@ export class Orchestrator implements RemoteActionController {
 
     // 4. Check for Spec Completion
     const targetSpecs = this.dag.getTargetSpecs();
-    const specsToCheck = targetSpecs.length > 0
-      ? targetSpecs
-      : this.dag.getAllNodes().filter((n) => n.kind === 'spec' && n.issue.state === 'OPEN').map((n) => n.issue.number);
+    const specsToCheck =
+      targetSpecs.length > 0
+        ? targetSpecs
+        : this.dag
+            .getAllNodes()
+            .filter((n) => n.kind === "spec" && n.issue.state === "OPEN")
+            .map((n) => n.issue.number);
 
     for (const specNum of specsToCheck) {
       const specStatus = this.dag.isSpecComplete(specNum);
 
       if (specStatus.isComplete && !this.notifiedSpecCompletions.has(specNum)) {
         this.notifiedSpecCompletions.add(specNum);
-        this.dashboard.log(`Spec #${specNum} is COMPLETE! All child tickets are merged.`);
+        this.dashboard.log(
+          `Spec #${specNum} is COMPLETE! All child tickets are merged.`,
+        );
         Notifier.notifySpecComplete(specNum, `Spec #${specNum} is complete`);
 
         try {
           await this.gh.addComment(
             specNum,
-            `🎉 **Spec Complete**: All child tickets for this spec have been implemented and closed.\n\nWaiting for developer review and closure.`
+            `🎉 **Spec Complete**: All child tickets for this spec have been implemented and closed.\n\nWaiting for developer review and closure.`,
           );
           await this.gh.editIssueLabels(specNum, {
             add: [this.config.labels.readyForHuman],
@@ -283,35 +319,59 @@ export class Orchestrator implements RemoteActionController {
     }
 
     // 5. Prune completed/closed target specs from the active target scope
-    const { removed: prunedSpecs, remaining: remainingSpecs } = this.dag.pruneCompletedTargetSpecs();
+    const { removed: prunedSpecs, remaining: remainingSpecs } =
+      this.dag.pruneCompletedTargetSpecs();
     for (const specNum of prunedSpecs) {
-      this.dashboard.log(`Spec #${specNum} is completed/closed. Removed from target scope.`);
+      this.dashboard.log(
+        `Spec #${specNum} is completed/closed. Removed from target scope.`,
+      );
     }
     if (prunedSpecs.length > 0 && remainingSpecs.length === 0) {
-      this.dashboard.log('All scoped specs have completed. Target scope updated to any unblocked task (all specs).');
+      this.dashboard.log(
+        "All scoped specs have completed. Target scope updated to any unblocked task (all specs).",
+      );
     }
 
     // 6. Check for newly ready feedback tasks
     const waitingNodes = this.dag.getWaitingFeedbackNodes();
     for (const node of waitingNodes) {
       const issue = node.issue;
-      const questionComments = issue.comments?.filter((c) => c.body.startsWith('❓ **Agent Question')) || [];
-      const rawQuestion = questionComments.length > 0
-        ? questionComments[questionComments.length - 1].body.replace(/^❓ \*\*Agent Question\*\*:\s*/, '')
-        : (issue.comments && issue.comments.length > 0 ? issue.comments[issue.comments.length - 1].body : '');
+      const questionComments =
+        issue.comments?.filter((c) =>
+          c.body.startsWith("❓ **Agent Question"),
+        ) || [];
+      const rawQuestion =
+        questionComments.length > 0
+          ? questionComments[questionComments.length - 1].body.replace(
+              /^❓ \*\*Agent Question\*\*:\s*/,
+              "",
+            )
+          : issue.comments && issue.comments.length > 0
+          ? issue.comments[issue.comments.length - 1].body
+          : "";
 
       const prevComment = this.lastKnownFeedbackQuestions.get(issue.number);
 
       if (rawQuestion && rawQuestion !== prevComment) {
         this.lastKnownFeedbackQuestions.set(issue.number, rawQuestion);
-        Notifier.notifyNeedsFeedback(issue.number, issue.title, rawQuestion, undefined, undefined, issue.url);
-        this.dashboard.log(`Notification sent for Issue #${issue.number} (needs info)`);
+        Notifier.notifyNeedsFeedback(
+          issue.number,
+          issue.title,
+          rawQuestion,
+          undefined,
+          undefined,
+          issue.url,
+        );
+        this.dashboard.log(
+          `Notification sent for Issue #${issue.number} (needs info)`,
+        );
       }
     }
 
     // 6. Schedule Ready Tasks up to maxConcurrency (with Runner Quota Filtering)
     const readyNodes = this.dag.getReadyNodes();
-    const availableSlots = this.config.maxConcurrency - this.activeTaskNumbers.size;
+    const availableSlots =
+      this.config.maxConcurrency - this.activeTaskNumbers.size;
 
     if (availableSlots <= 0 || readyNodes.length === 0) {
       return;
@@ -319,7 +379,10 @@ export class Orchestrator implements RemoteActionController {
 
     // Filter tasks whose assigned runner is allowed and not currently paused due to quota
     const unpausedNodes = readyNodes.filter((node) => {
-      const runnerName = this.runnerFacade.resolveRunnerName(node.issue, this.config.runner);
+      const runnerName = this.runnerFacade.resolveRunnerName(
+        node.issue,
+        this.config.runner,
+      );
       const isAllowed = this.runnerFacade.isProviderAllowed(runnerName);
       return isAllowed && !this.quotaMonitor.isRunnerPaused(runnerName);
     });
@@ -343,10 +406,13 @@ export class Orchestrator implements RemoteActionController {
     }
   }
 
-  public async injectPrompt(issueNumber: number, prompt: string): Promise<{ success: boolean; message: string }> {
+  public async injectPrompt(
+    issueNumber: number,
+    prompt: string,
+  ): Promise<{ success: boolean; message: string }> {
     this.eventBus.emitAgentEvent({
       issueNumber,
-      type: 'prompt_injected',
+      type: "prompt_injected",
       summary: `Prompt injected by developer: "${prompt}"`,
       detail: { prompt },
     });
@@ -369,7 +435,10 @@ export class Orchestrator implements RemoteActionController {
       });
       return {
         success: true,
-        message: `Resumed task #${issueNumber} with feedback: "${prompt.slice(0, 60)}"`,
+        message: `Resumed task #${issueNumber} with feedback: "${prompt.slice(
+          0,
+          60,
+        )}"`,
       };
     }
 
@@ -383,23 +452,30 @@ export class Orchestrator implements RemoteActionController {
     node: DAGNode,
     overrideFeedback?: string,
     autoNudgeCount: number = 0,
-    failureRetryCount: number = 0
+    failureRetryCount: number = 0,
   ): Promise<void> {
     const { issue } = node;
     const isContinuation = await this.worktreeMgr.worktreeExists(issue.number);
-    const runnerName = this.runnerFacade.resolveRunnerName(issue, this.config.runner);
+    const runnerName = this.runnerFacade.resolveRunnerName(
+      issue,
+      this.config.runner,
+    );
 
-    this.dashboard.log(`Dispatching Issue #${issue.number} [${runnerName}]: ${issue.title} ${isContinuation ? '(resuming)' : ''}`);
+    this.dashboard.log(
+      `Dispatching Issue #${issue.number} [${runnerName}]: ${issue.title} ${
+        isContinuation ? "(resuming)" : ""
+      }`,
+    );
 
-    let worktreePath = '';
-    let branchName = '';
+    let worktreePath = "";
+    let branchName = "";
 
     try {
       // 1. Create or get Worktree
       const wtInfo = await this.worktreeMgr.createWorktree(
         issue.number,
         issue.title,
-        this.config.baseBranch
+        this.config.baseBranch,
       );
       worktreePath = wtInfo.worktreePath;
       branchName = wtInfo.branchName;
@@ -418,7 +494,7 @@ export class Orchestrator implements RemoteActionController {
         issueNumber: issue.number,
         title: issue.title,
         branchName,
-        status: 'running',
+        status: "running",
         startedAt: new Date(),
       });
 
@@ -433,15 +509,24 @@ export class Orchestrator implements RemoteActionController {
 
       // 2. Post Start/Resume Comment to GitHub Issue
       const startComment = isContinuation
-        ? `🔄 **Agent Auto-Pilot resumed work**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${runnerName}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Resumed At**: \`${new Date().toUTCString()}\`\n\n*Continuing implementation with latest feedback from comments.*`
-        : `🤖 **Agent Auto-Pilot started implementation**\n\n- **Session ID**: \`${session.sessionId}\`\n- **Runner**: \`${runnerName}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${this.config.baseBranch}\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*Delegating task to \`${runnerName}\` (/implement).*`;
+        ? `🔄 **Agent Auto-Pilot resumed work**\n\n- **Session ID**: \`${
+            session.sessionId
+          }\`\n- **Runner**: \`${runnerName}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Resumed At**: \`${new Date().toUTCString()}\`\n\n*Continuing implementation with latest feedback from comments.*`
+        : `🤖 **Agent Auto-Pilot started implementation**\n\n- **Session ID**: \`${
+            session.sessionId
+          }\`\n- **Runner**: \`${runnerName}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${
+            this.config.baseBranch
+          }\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*Delegating task to \`${runnerName}\` (/implement).*`;
 
       try {
         await this.gh.addComment(issue.number, startComment);
         if (isContinuation) {
           await this.gh.editIssueLabels(issue.number, {
             add: [this.config.labels.readyForAgent],
-            remove: [this.config.labels.readyForHuman, this.config.labels.needsInfo],
+            remove: [
+              this.config.labels.readyForHuman,
+              this.config.labels.needsInfo,
+            ],
           });
         }
       } catch {
@@ -450,28 +535,43 @@ export class Orchestrator implements RemoteActionController {
 
       // 3. Check user feedback for continuation
       let userFeedback: string | undefined = overrideFeedback;
-      if (!userFeedback && isContinuation && issue.comments && issue.comments.length > 0) {
+      if (
+        !userFeedback &&
+        isContinuation &&
+        issue.comments &&
+        issue.comments.length > 0
+      ) {
         const isBotOrAgentComment = (body: string): boolean =>
-          body.startsWith('🤖') ||
-          body.startsWith('🔄') ||
-          body.startsWith('🎉') ||
-          body.startsWith('⚠️') ||
-          body.startsWith('❌') ||
-          body.startsWith('❓ **Agent Question');
+          body.startsWith("🤖") ||
+          body.startsWith("🔄") ||
+          body.startsWith("🎉") ||
+          body.startsWith("⚠️") ||
+          body.startsWith("❌") ||
+          body.startsWith("❓ **Agent Question");
 
         // Find the latest question asked by the agent (if any)
-        const questionComments = issue.comments.filter((c) => c.body.startsWith('❓ **Agent Question'));
-        const latestQuestion = questionComments.length > 0 ? questionComments[questionComments.length - 1] : undefined;
-        const questionTime = latestQuestion ? new Date(latestQuestion.createdAt).getTime() : 0;
+        const questionComments = issue.comments.filter((c) =>
+          c.body.startsWith("❓ **Agent Question"),
+        );
+        const latestQuestion =
+          questionComments.length > 0
+            ? questionComments[questionComments.length - 1]
+            : undefined;
+        const questionTime = latestQuestion
+          ? new Date(latestQuestion.createdAt).getTime()
+          : 0;
 
         const previousSession = this.stateMgr.getSession(issue.number);
-        const lastProcessedCommentId = previousSession.metadata?.lastProcessedCommentId;
+        const lastProcessedCommentId =
+          previousSession.metadata?.lastProcessedCommentId;
 
         // Filter to only new, unhandled human replies created after the latest question
         const newReplies = issue.comments.filter((c) => {
           if (isBotOrAgentComment(c.body)) return false;
-          if (lastProcessedCommentId && c.id === lastProcessedCommentId) return false;
-          if (latestQuestion && new Date(c.createdAt).getTime() <= questionTime) return false;
+          if (lastProcessedCommentId && c.id === lastProcessedCommentId)
+            return false;
+          if (latestQuestion && new Date(c.createdAt).getTime() <= questionTime)
+            return false;
           return true;
         });
 
@@ -483,12 +583,17 @@ export class Orchestrator implements RemoteActionController {
           this.stateMgr.recordProcessedComment(issue.number, latestReply.id);
 
           // Acknowledge developer feedback with 'EYES' reaction on GitHub
-          await this.gh.addCommentReaction(latestReply.id, 'EYES');
+          await this.gh.addCommentReaction(latestReply.id, "EYES");
         }
       }
 
       // 4. Run Agent via RunnerFacade
-      this.stateMgr.recordTaskStage(issue.number, 'AGENT_RUNNING', 'running', `Invoking ${runnerName} /implement`);
+      this.stateMgr.recordTaskStage(
+        issue.number,
+        "AGENT_RUNNING",
+        "running",
+        `Invoking ${runnerName} /implement`,
+      );
 
       const runnerRes = await this.runnerFacade.run(
         {
@@ -508,34 +613,51 @@ export class Orchestrator implements RemoteActionController {
           cwd: worktreePath,
           issueNumber: issue.number,
           onOutput: (chunk: string) => {
-            this.stateMgr.appendTaskLog(issue.number, 'stdout', chunk);
+            this.stateMgr.appendTaskLog(issue.number, "stdout", chunk);
           },
           onStderr: (chunk: string) => {
-            this.stateMgr.appendTaskLog(issue.number, 'stderr', chunk);
+            this.stateMgr.appendTaskLog(issue.number, "stderr", chunk);
           },
           onPid: (pid: number) => {
-            this.stateMgr.recordTaskStage(issue.number, 'PID_ASSIGNED', 'running', `Process PID: ${pid}`);
+            this.stateMgr.recordTaskStage(
+              issue.number,
+              "PID_ASSIGNED",
+              "running",
+              `Process PID: ${pid}`,
+            );
           },
         },
-        this.config.runner
+        this.config.runner,
       );
 
       // Check if runner was interrupted to apply developer prompt
-      if (runnerRes.status === 'INTERRUPTED_FOR_PROMPT') {
+      if (runnerRes.status === "INTERRUPTED_FOR_PROMPT") {
         const nextPrompt = runnerRes.injectedPrompt || userFeedback;
-        this.dashboard.log(`Issue #${issue.number} interrupted by developer prompt. Re-executing session with feedback...`);
-        this.stateMgr.recordTaskStage(issue.number, 'PROMPT_RESUMED', 'running', `Resuming with prompt: ${nextPrompt?.slice(0, 80)}`);
+        this.dashboard.log(
+          `Issue #${issue.number} interrupted by developer prompt. Re-executing session with feedback...`,
+        );
+        this.stateMgr.recordTaskStage(
+          issue.number,
+          "PROMPT_RESUMED",
+          "running",
+          `Resuming with prompt: ${nextPrompt?.slice(0, 80)}`,
+        );
         return this.executeTask(node, nextPrompt, 0);
       }
 
       // Check if runner paused due to quota
-      if (runnerRes.status === 'QUOTA_PAUSED') {
-        this.stateMgr.recordTaskStage(issue.number, 'QUOTA_PAUSED', 'paused_quota', 'Paused due to 5h quota limits');
+      if (runnerRes.status === "QUOTA_PAUSED") {
+        this.stateMgr.recordTaskStage(
+          issue.number,
+          "QUOTA_PAUSED",
+          "paused_quota",
+          "Paused due to 5h quota limits",
+        );
         this.dashboard.updateWorker({
           issueNumber: issue.number,
           title: issue.title,
           branchName,
-          status: 'paused_quota',
+          status: "paused_quota",
           startedAt: new Date(),
         });
         this.dashboard.log(`Issue #${issue.number} paused due to quota.`);
@@ -545,52 +667,83 @@ export class Orchestrator implements RemoteActionController {
       // 5. Inspect issue state on GitHub after agent finishes
       const updatedIssue = await this.gh.viewIssue(issue.number);
       const hasFeedbackLabel = updatedIssue.labels.some((l) =>
-        [this.config.labels.needsInfo, this.config.labels.readyForHuman].includes(l.name)
+        [
+          this.config.labels.needsInfo,
+          this.config.labels.readyForHuman,
+        ].includes(l.name),
       );
 
       // Case A: Agent requested info from human
-      if (hasFeedbackLabel || runnerRes.status === 'NEEDS_INFO') {
-        node.status = 'waiting_feedback';
+      if (hasFeedbackLabel || runnerRes.status === "NEEDS_INFO") {
+        node.status = "waiting_feedback";
         node.issue.labels = updatedIssue.labels;
-        this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
-        this.dashboard.log(`Issue #${issue.number} parked awaiting developer feedback.`);
+        this.stateMgr.finishTaskSession(issue.number, "waiting_feedback");
+        this.dashboard.log(
+          `Issue #${issue.number} parked awaiting developer feedback.`,
+        );
         return;
       }
 
       // Case B: Agent completed and closed/merged the issue
-      if (updatedIssue.state === 'CLOSED') {
-        node.status = 'completed';
-        node.issue.state = 'CLOSED';
-        this.stateMgr.finishTaskSession(issue.number, 'completed');
+      if (updatedIssue.state === "CLOSED") {
+        node.status = "completed";
+        node.issue.state = "CLOSED";
+        this.stateMgr.finishTaskSession(issue.number, "completed");
         this.dashboard.log(`Issue #${issue.number} completed and closed.`);
         Notifier.notifyTaskMerged(issue.number, issue.title);
 
         if (this.config.cleanupWorktreeOnClose) {
-          await this.worktreeMgr.cleanupWorktree(issue.number, issue.title, true);
+          await this.worktreeMgr.cleanupWorktree(
+            issue.number,
+            issue.title,
+            true,
+          );
         }
         return;
       }
 
       // Case C: Issue remains open
-      if (runnerRes.success || runnerRes.status === 'COMPLETED') {
+      if (runnerRes.success || runnerRes.status === "COMPLETED") {
         const pr = await this.gh.findPRForBranch(branchName);
 
         // Attempt automated merge if autoMerge is enabled and a PR was opened
-        if (pr && pr.state === 'OPEN' && this.config.autoMerge) {
+        if (pr && pr.state === "OPEN" && this.config.autoMerge) {
           try {
-            this.dashboard.log(`Auto-merging PR #${pr.number} for Issue #${issue.number}...`);
+            this.dashboard.log(
+              `Auto-merging PR #${pr.number} for Issue #${issue.number}...`,
+            );
             await this.gh.mergePR(pr.number, this.config.mergeMethod, true);
-            await this.gh.closeIssue(issue.number, `Closed via automated merge of PR #${pr.number}`);
-            this.stateMgr.finishTaskSession(issue.number, 'completed', { prUrl: pr.url, prNumber: pr.number });
-            this.dashboard.log(`Issue #${issue.number} completed and merged via PR #${pr.number}.`);
-            Notifier.notifyTaskMerged(issue.number, issue.title, pr.url, pr.number, this.config.baseBranch);
+            await this.gh.closeIssue(
+              issue.number,
+              `Closed via automated merge of PR #${pr.number}`,
+            );
+            this.stateMgr.finishTaskSession(issue.number, "completed", {
+              prUrl: pr.url,
+              prNumber: pr.number,
+            });
+            this.dashboard.log(
+              `Issue #${issue.number} completed and merged via PR #${pr.number}.`,
+            );
+            Notifier.notifyTaskMerged(
+              issue.number,
+              issue.title,
+              pr.url,
+              pr.number,
+              this.config.baseBranch,
+            );
 
             if (this.config.cleanupWorktreeOnClose) {
-              await this.worktreeMgr.cleanupWorktree(issue.number, issue.title, true);
+              await this.worktreeMgr.cleanupWorktree(
+                issue.number,
+                issue.title,
+                true,
+              );
             }
             return;
           } catch (mergeErr: any) {
-            this.dashboard.log(`Auto-merge failed for PR #${pr.number}: ${mergeErr.message}. Transitioning to human review.`);
+            this.dashboard.log(
+              `Auto-merge failed for PR #${pr.number}: ${mergeErr.message}. Transitioning to human review.`,
+            );
           }
         }
 
@@ -604,18 +757,27 @@ export class Orchestrator implements RemoteActionController {
             const prMsg = `\n\n- **Pull Request**: [#${pr.number}](${pr.url})`;
             await this.gh.addComment(
               issue.number,
-              `👀 **Ready for Human Review**\n\nPull Request [#${pr.number}](${pr.url}) is open for review.${prMsg}\n\n*Marked \`${this.config.labels.readyForHuman}\` for developer review and merge.*`
+              `👀 **Ready for Human Review**\n\nPull Request [#${pr.number}](${pr.url}) is open for review.${prMsg}\n\n*Marked \`${this.config.labels.readyForHuman}\` for developer review and merge.*`,
             );
           } catch {
             // Best effort
           }
 
-          this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback', {
+          this.stateMgr.finishTaskSession(issue.number, "waiting_feedback", {
             prUrl: pr.url,
             prNumber: pr.number,
           });
-          this.dashboard.log(`Issue #${issue.number} marked ready-for-human (PR #${pr.number}).`);
-          Notifier.notifyNeedsFeedback(issue.number, issue.title, `PR #${pr.number} ready for review`, pr.url, pr.number, issue.url);
+          this.dashboard.log(
+            `Issue #${issue.number} marked ready-for-human (PR #${pr.number}).`,
+          );
+          Notifier.notifyNeedsFeedback(
+            issue.number,
+            issue.title,
+            `PR #${pr.number} ready for review`,
+            pr.url,
+            pr.number,
+            issue.url,
+          );
           return;
         }
 
@@ -623,10 +785,14 @@ export class Orchestrator implements RemoteActionController {
         const maxNudges = this.config.maxAutoNudges ?? 2;
         if (autoNudgeCount < maxNudges) {
           this.dashboard.log(
-            `Issue #${issue.number}: Agent finished turn without opening PR or closing issue. Auto-nudging agent to verify and create PR (attempt ${autoNudgeCount + 1}/${maxNudges})...`
+            `Issue #${
+              issue.number
+            }: Agent finished turn without opening PR or closing issue. Auto-nudging agent to verify and create PR (attempt ${
+              autoNudgeCount + 1
+            }/${maxNudges})...`,
           );
 
-          const mergeMethod = this.config.mergeMethod || 'squash';
+          const mergeMethod = this.config.mergeMethod || "squash";
           const autoMergeStep = this.config.autoMerge
             ? `4. Since autoMerge is enabled, once tests/CI pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
             : `4. Keep the Pull Request open for human review (do not auto-merge).`;
@@ -640,18 +806,30 @@ Please check if your implementation, tests, and code review (/code-review) were 
 Finalization steps:
 1. Ensure all changes are committed: \`git add -A && git commit -m "..."\`
 2. Push your branch to remote: \`git push -u origin ${branchName}\`
-3. Open a Pull Request if not already opened: \`gh pr create --title "${issue.title.replace(/"/g, '\\"')}" --body "Closes #${issue.number}"\`
+3. Open a Pull Request if not already opened: \`gh pr create --title "${issue.title.replace(
+            /"/g,
+            '\\"',
+          )}" --body "Closes #${issue.number}"\`
 ${autoMergeStep}
-5. If you are blocked or intentionally require human intervention, explain why in an issue comment (\`gh issue comment ${issue.number} --body "..."\`) and label the issue \`ready-for-human\`.`;
+5. If you are blocked or intentionally require human intervention, explain why in an issue comment (\`gh issue comment ${
+            issue.number
+          } --body "..."\`) and label the issue \`ready-for-human\`.`;
 
           this.stateMgr.recordTaskStage(
             issue.number,
-            'AUTO_NUDGE',
-            'running',
-            `Auto-nudging agent to finalize PR (attempt ${autoNudgeCount + 1}/${maxNudges})`
+            "AUTO_NUDGE",
+            "running",
+            `Auto-nudging agent to finalize PR (attempt ${
+              autoNudgeCount + 1
+            }/${maxNudges})`,
           );
 
-          return this.executeTask(node, nudgePrompt, autoNudgeCount + 1, failureRetryCount);
+          return this.executeTask(
+            node,
+            nudgePrompt,
+            autoNudgeCount + 1,
+            failureRetryCount,
+          );
         }
 
         // Exhausted auto-nudges without PR or feedback request
@@ -662,27 +840,40 @@ ${autoMergeStep}
           });
           await this.gh.addComment(
             issue.number,
-            `⚠️ **Agent Stalled Without PR**\n\nThe agent completed execution without creating a Pull Request or closing the issue after ${maxNudges} follow-up nudges.\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
+            `⚠️ **Agent Stalled Without PR**\n\nThe agent completed execution without creating a Pull Request or closing the issue after ${maxNudges} follow-up nudges.\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`,
           );
         } catch {
           // Best effort
         }
 
-        this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
-        this.dashboard.log(`Issue #${issue.number} marked ready-for-human (no PR opened after ${maxNudges} nudges).`);
-        Notifier.notifyNeedsFeedback(issue.number, issue.title, 'Agent finished execution without opening a PR', undefined, undefined, issue.url);
+        this.stateMgr.finishTaskSession(issue.number, "waiting_feedback");
+        this.dashboard.log(
+          `Issue #${issue.number} marked ready-for-human (no PR opened after ${maxNudges} nudges).`,
+        );
+        Notifier.notifyNeedsFeedback(
+          issue.number,
+          issue.title,
+          "Agent finished execution without opening a PR",
+          undefined,
+          undefined,
+          issue.url,
+        );
         return;
       }
 
       // Case D: Runner turn timed out (Solution 1: Auto-Resume on Timeout)
-      if (runnerRes.status === 'TIMED_OUT' || runnerRes.isTimeout) {
+      if (runnerRes.status === "TIMED_OUT" || runnerRes.isTimeout) {
         const maxNudges = this.config.maxAutoNudges ?? 2;
         if (autoNudgeCount < maxNudges) {
           this.dashboard.log(
-            `Issue #${issue.number}: Agent turn timed out. Automatically resuming task with continuation prompt (attempt ${autoNudgeCount + 1}/${maxNudges})...`
+            `Issue #${
+              issue.number
+            }: Agent turn timed out. Automatically resuming task with continuation prompt (attempt ${
+              autoNudgeCount + 1
+            }/${maxNudges})...`,
           );
 
-          const mergeMethod = this.config.mergeMethod || 'squash';
+          const mergeMethod = this.config.mergeMethod || "squash";
           const autoMergeStep = this.config.autoMerge
             ? `4. Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
             : `4. Keep the Pull Request open for human review (do not auto-merge).`;
@@ -694,18 +885,28 @@ Please inspect the existing worktree to see what was already implemented, avoid 
 2. Complete any remaining acceptance criteria and write/run tests.
 3. Commit all changes: \`git add -A && git commit -m "..."\`
 4. Push your branch to remote: \`git push -u origin ${branchName}\`
-5. Open a Pull Request: \`gh pr create --title "${issue.title.replace(/"/g, '\\"')}" --body "Closes #${issue.number}"\`
+5. Open a Pull Request: \`gh pr create --title "${issue.title.replace(
+            /"/g,
+            '\\"',
+          )}" --body "Closes #${issue.number}"\`
 ${autoMergeStep}
 6. If blocked or clarification is needed, comment on the issue and label \`ready-for-human\`.`;
 
           this.stateMgr.recordTaskStage(
             issue.number,
-            'AUTO_RESUME_TIMEOUT',
-            'running',
-            `Auto-resuming timed-out agent turn (attempt ${autoNudgeCount + 1}/${maxNudges})`
+            "AUTO_RESUME_TIMEOUT",
+            "running",
+            `Auto-resuming timed-out agent turn (attempt ${
+              autoNudgeCount + 1
+            }/${maxNudges})`,
           );
 
-          return this.executeTask(node, timeoutPrompt, autoNudgeCount + 1, failureRetryCount);
+          return this.executeTask(
+            node,
+            timeoutPrompt,
+            autoNudgeCount + 1,
+            failureRetryCount,
+          );
         }
 
         // Exhausted timeout auto-resumes
@@ -716,49 +917,73 @@ ${autoMergeStep}
           });
           await this.gh.addComment(
             issue.number,
-            `⚠️ **Agent Execution Timed Out**\n\nThe agent turn timed out after ${maxNudges} follow-up continuation attempts.\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
+            `⚠️ **Agent Execution Timed Out**\n\nThe agent turn timed out after ${maxNudges} follow-up continuation attempts.\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`,
           );
         } catch {
           // Best effort
         }
 
-        this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
-        this.dashboard.log(`Issue #${issue.number} marked ready-for-human (timed out after ${maxNudges} attempts).`);
-        Notifier.notifyNeedsFeedback(issue.number, issue.title, `Agent timed out after ${maxNudges} attempts`, undefined, undefined, issue.url);
+        this.stateMgr.finishTaskSession(issue.number, "waiting_feedback");
+        this.dashboard.log(
+          `Issue #${issue.number} marked ready-for-human (timed out after ${maxNudges} attempts).`,
+        );
+        Notifier.notifyNeedsFeedback(
+          issue.number,
+          issue.title,
+          `Agent timed out after ${maxNudges} attempts`,
+          undefined,
+          undefined,
+          issue.url,
+        );
         return;
       }
 
       // Case E: Runner failed / error (Solution 3: Transient Failure Retry Policy)
-      const maxRetries = this.config.maxRetriesOnFailure ?? this.config.maxAutoRetries ?? 2;
+      const maxRetries =
+        this.config.maxRetriesOnFailure ?? this.config.maxAutoRetries ?? 2;
       if (failureRetryCount < maxRetries) {
         this.dashboard.log(
-          `Issue #${issue.number}: Runner exited with error (${runnerRes.error || 'Unknown'}). Automatically retrying (attempt ${failureRetryCount + 1}/${maxRetries})...`
+          `Issue #${issue.number}: Runner exited with error (${
+            runnerRes.error || "Unknown"
+          }). Automatically retrying (attempt ${
+            failureRetryCount + 1
+          }/${maxRetries})...`,
         );
 
-        const mergeMethod = this.config.mergeMethod || 'squash';
+        const mergeMethod = this.config.mergeMethod || "squash";
         const autoMergeStep = this.config.autoMerge
           ? `4. Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
           : `4. Keep the Pull Request open for human review (do not auto-merge).`;
 
         const retryPrompt = `Your previous execution turn encountered an error:
-${runnerRes.error || 'Unknown error'}
+${runnerRes.error || "Unknown error"}
 
 Please inspect the current worktree and git status, resolve the issue, and continue implementation:
 1. Check existing changes, build errors, or test failures.
 2. Complete implementation and verify all tests pass.
 3. Commit and push: \`git add -A && git commit -m "..." && git push -u origin ${branchName}\`
-4. Open a Pull Request: \`gh pr create --title "${issue.title.replace(/"/g, '\\"')}" --body "Closes #${issue.number}"\`
+4. Open a Pull Request: \`gh pr create --title "${issue.title.replace(
+          /"/g,
+          '\\"',
+        )}" --body "Closes #${issue.number}"\`
 ${autoMergeStep}
 5. If blocked or unable to resolve, explain in an issue comment and label \`ready-for-human\`.`;
 
         this.stateMgr.recordTaskStage(
           issue.number,
-          'AUTO_RETRY_FAILURE',
-          'running',
-          `Auto-retrying failed task (attempt ${failureRetryCount + 1}/${maxRetries}): ${(runnerRes.error || '').slice(0, 80)}`
+          "AUTO_RETRY_FAILURE",
+          "running",
+          `Auto-retrying failed task (attempt ${
+            failureRetryCount + 1
+          }/${maxRetries}): ${(runnerRes.error || "").slice(0, 80)}`,
         );
 
-        return this.executeTask(node, retryPrompt, autoNudgeCount, failureRetryCount + 1);
+        return this.executeTask(
+          node,
+          retryPrompt,
+          autoNudgeCount,
+          failureRetryCount + 1,
+        );
       }
 
       // Exhausted retries on failure
@@ -769,30 +994,59 @@ ${autoMergeStep}
         });
         await this.gh.addComment(
           issue.number,
-          `⚠️ **Agent Failed After ${maxRetries} Retries**\n\nThe agent failed with the following error after ${maxRetries} retry attempts:\n\n\`\`\`\n${runnerRes.error || 'Unknown error'}\n\`\`\`\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
+          `⚠️ **Agent Failed After ${maxRetries} Retries**\n\nThe agent failed with the following error after ${maxRetries} retry attempts:\n\n\`\`\`\n${
+            runnerRes.error || "Unknown error"
+          }\n\`\`\`\n\n*Marked \`${
+            this.config.labels.readyForHuman
+          }\` for manual developer review.*`,
         );
       } catch {
         // Best effort
       }
 
-      this.stateMgr.finishTaskSession(issue.number, 'failed', { error: runnerRes.error });
-      this.dashboard.log(`Agent failed on Issue #${issue.number} after ${maxRetries} retries: ${runnerRes.error || 'Unknown'}`);
-      Notifier.notifyNeedsFeedback(issue.number, issue.title, `Agent failed after ${maxRetries} retries`, undefined, undefined, issue.url);
+      this.stateMgr.finishTaskSession(issue.number, "failed", {
+        error: runnerRes.error,
+      });
+      this.dashboard.log(
+        `Agent failed on Issue #${issue.number} after ${maxRetries} retries: ${
+          runnerRes.error || "Unknown"
+        }`,
+      );
+      Notifier.notifyNeedsFeedback(
+        issue.number,
+        issue.title,
+        `Agent failed after ${maxRetries} retries`,
+        undefined,
+        undefined,
+        issue.url,
+      );
       return;
     } catch (err: any) {
-      const maxRetries = this.config.maxRetriesOnFailure ?? this.config.maxAutoRetries ?? 2;
+      const maxRetries =
+        this.config.maxRetriesOnFailure ?? this.config.maxAutoRetries ?? 2;
       if (failureRetryCount < maxRetries) {
         this.dashboard.log(
-          `Issue #${issue.number}: Task exception: ${err.message}. Automatically retrying (attempt ${failureRetryCount + 1}/${maxRetries})...`
+          `Issue #${issue.number}: Task exception: ${
+            err.message
+          }. Automatically retrying (attempt ${
+            failureRetryCount + 1
+          }/${maxRetries})...`,
         );
         this.stateMgr.recordTaskStage(
           issue.number,
-          'AUTO_RETRY_FAILURE',
-          'running',
-          `Auto-retrying task exception (attempt ${failureRetryCount + 1}/${maxRetries}): ${err.message.slice(0, 80)}`
+          "AUTO_RETRY_FAILURE",
+          "running",
+          `Auto-retrying task exception (attempt ${
+            failureRetryCount + 1
+          }/${maxRetries}): ${err.message.slice(0, 80)}`,
         );
         const retryPrompt = `Your previous execution turn failed with exception: ${err.message}.\n\nPlease inspect the worktree, resolve any errors, and finish the task.`;
-        return this.executeTask(node, retryPrompt, autoNudgeCount, failureRetryCount + 1);
+        return this.executeTask(
+          node,
+          retryPrompt,
+          autoNudgeCount,
+          failureRetryCount + 1,
+        );
       }
 
       try {
@@ -802,15 +1056,24 @@ ${autoMergeStep}
         });
         await this.gh.addComment(
           issue.number,
-          `⚠️ **Task Error After ${maxRetries} Retries**\n\n\`\`\`\n${err.message}\n\`\`\`\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
+          `⚠️ **Task Error After ${maxRetries} Retries**\n\n\`\`\`\n${err.message}\n\`\`\`\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`,
         );
       } catch {
         // Best effort
       }
 
-      this.stateMgr.finishTaskSession(issue.number, 'failed', { error: err.message });
+      this.stateMgr.finishTaskSession(issue.number, "failed", {
+        error: err.message,
+      });
       this.dashboard.log(`Task #${issue.number} error: ${err.message}`);
-      Notifier.notifyNeedsFeedback(issue.number, issue.title, `Task error: ${err.message}`, undefined, undefined, issue.url);
+      Notifier.notifyNeedsFeedback(
+        issue.number,
+        issue.title,
+        `Task error: ${err.message}`,
+        undefined,
+        undefined,
+        issue.url,
+      );
     }
   }
 
@@ -842,7 +1105,11 @@ ${autoMergeStep}
     return this.config;
   }
 
-  public getActiveWorktrees(): Array<{ path: string; branch: string; issueNumber?: number }> {
+  public getActiveWorktrees(): Array<{
+    path: string;
+    branch: string;
+    issueNumber?: number;
+  }> {
     return this.latestActiveWorktrees;
   }
 
@@ -854,45 +1121,63 @@ ${autoMergeStep}
     return this.runnerFacade.getRegistry();
   }
 
-  public async pauseWorker(issueNumber: number): Promise<{ success: boolean; message: string }> {
+  public async pauseWorker(
+    issueNumber: number,
+  ): Promise<{ success: boolean; message: string }> {
     const paused = this.runnerFacade.pause(issueNumber);
     if (paused) {
       const worker = this.dashboard.getActiveWorkers().get(issueNumber);
       if (worker) {
-        worker.status = 'paused_quota';
+        worker.status = "paused_quota";
         this.dashboard.updateWorker(worker);
       }
       this.dashboard.log(`Paused worker for Issue #${issueNumber}`);
       this.eventBus.emitAgentEvent({
         issueNumber,
-        type: 'info',
+        type: "info",
         summary: `⏸️ Worker paused by developer`,
       });
-      return { success: true, message: `Paused worker for Issue #${issueNumber}` };
+      return {
+        success: true,
+        message: `Paused worker for Issue #${issueNumber}`,
+      };
     }
-    return { success: false, message: `Could not pause worker #${issueNumber} (no active runner process)` };
+    return {
+      success: false,
+      message: `Could not pause worker #${issueNumber} (no active runner process)`,
+    };
   }
 
-  public async resumeWorker(issueNumber: number): Promise<{ success: boolean; message: string }> {
+  public async resumeWorker(
+    issueNumber: number,
+  ): Promise<{ success: boolean; message: string }> {
     const resumed = this.runnerFacade.resume(issueNumber);
     if (resumed) {
       const worker = this.dashboard.getActiveWorkers().get(issueNumber);
       if (worker) {
-        worker.status = 'running';
+        worker.status = "running";
         this.dashboard.updateWorker(worker);
       }
       this.dashboard.log(`Resumed worker for Issue #${issueNumber}`);
       this.eventBus.emitAgentEvent({
         issueNumber,
-        type: 'info',
+        type: "info",
         summary: `▶️ Worker resumed by developer`,
       });
-      return { success: true, message: `Resumed worker for Issue #${issueNumber}` };
+      return {
+        success: true,
+        message: `Resumed worker for Issue #${issueNumber}`,
+      };
     }
-    return { success: false, message: `Could not resume worker #${issueNumber}` };
+    return {
+      success: false,
+      message: `Could not resume worker #${issueNumber}`,
+    };
   }
 
-  public async killAndWipeWorker(issueNumber: number): Promise<{ success: boolean; message: string }> {
+  public async killAndWipeWorker(
+    issueNumber: number,
+  ): Promise<{ success: boolean; message: string }> {
     try {
       await this.runnerFacade.stop(issueNumber);
     } catch {}
@@ -906,54 +1191,88 @@ ${autoMergeStep}
 
     this.stateMgr.deleteSession(issueNumber);
 
-    this.dashboard.log(`Killed worker and wiped worktree for Issue #${issueNumber}`);
+    this.dashboard.log(
+      `Killed worker and wiped worktree for Issue #${issueNumber}`,
+    );
     this.eventBus.emitAgentEvent({
       issueNumber,
-      type: 'info',
+      type: "info",
       summary: `🛑 Worker killed and worktree wiped by developer`,
     });
 
     this.tick().catch(() => {});
-    return { success: true, message: `Killed worker and wiped worktree for Issue #${issueNumber}` };
+    return {
+      success: true,
+      message: `Killed worker and wiped worktree for Issue #${issueNumber}`,
+    };
   }
 
-  public async openIssueInBrowser(issueNumber: number): Promise<{ success: boolean; message: string }> {
+  public async openIssueInBrowser(
+    issueNumber: number,
+  ): Promise<{ success: boolean; message: string }> {
     try {
-      await execa('gh', ['issue', 'view', String(issueNumber), '--web']);
-      return { success: true, message: `Opened Issue #${issueNumber} in GitHub web browser` };
+      await execa("gh", ["issue", "view", String(issueNumber), "--web"]);
+      return {
+        success: true,
+        message: `Opened Issue #${issueNumber} in GitHub web browser`,
+      };
     } catch {
       if (this.config.repository) {
         const url = `https://github.com/${this.config.repository}/issues/${issueNumber}`;
         try {
-          const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+          const opener =
+            process.platform === "darwin"
+              ? "open"
+              : process.platform === "win32"
+              ? "start"
+              : "xdg-open";
           await execa(opener, [url]);
-          return { success: true, message: `Opened Issue #${issueNumber} in browser` };
+          return {
+            success: true,
+            message: `Opened Issue #${issueNumber} in browser`,
+          };
         } catch (err: any) {
-          return { success: false, message: `Failed to open browser: ${err.message}` };
+          return {
+            success: false,
+            message: `Failed to open browser: ${err.message}`,
+          };
         }
       }
-      return { success: false, message: `Could not open Issue #${issueNumber}` };
+      return {
+        success: false,
+        message: `Could not open Issue #${issueNumber}`,
+      };
     }
   }
 
-  public async replyToNeedsInfo(issueNumber: number, answer: string): Promise<void> {
+  public async replyToNeedsInfo(
+    issueNumber: number,
+    answer: string,
+  ): Promise<void> {
     const commentBody = `💬 **Developer Response** (via Telegram):\n\n${answer}`;
     try {
       await this.gh.addComment(issueNumber, commentBody);
       await this.gh.editIssueLabels(issueNumber, {
         add: [this.config.labels.readyForAgent],
-        remove: [this.config.labels.readyForHuman, this.config.labels.needsInfo],
+        remove: [
+          this.config.labels.readyForHuman,
+          this.config.labels.needsInfo,
+        ],
       });
     } catch (err: any) {
-      this.dashboard.log(`Failed to update GitHub issue #${issueNumber} on reply: ${err.message}`);
+      this.dashboard.log(
+        `Failed to update GitHub issue #${issueNumber} on reply: ${err.message}`,
+      );
     }
 
     const node = this.dag.getNode(issueNumber);
     if (node) {
-      node.status = 'ready';
+      node.status = "ready";
       if (node.issue.labels) {
         node.issue.labels = node.issue.labels.filter(
-          (l) => l.name !== this.config.labels.needsInfo && l.name !== this.config.labels.readyForHuman
+          (l) =>
+            l.name !== this.config.labels.needsInfo &&
+            l.name !== this.config.labels.readyForHuman,
         );
         node.issue.labels.push({ name: this.config.labels.readyForAgent });
       }
@@ -965,51 +1284,59 @@ ${autoMergeStep}
 
   public resumeQuota(runner?: string): void {
     this.quotaMonitor.resumeFromQuota(runner);
-    this.stateMgr.updateDaemonStatus('running');
-    const runnerStr = runner ? ` for runner ${runner}` : '';
-    this.dashboard.log(`Quota resumed by developer${runnerStr}. Resuming workers.`);
+    this.stateMgr.updateDaemonStatus("running");
+    const runnerStr = runner ? ` for runner ${runner}` : "";
+    this.dashboard.log(
+      `Quota resumed by developer${runnerStr}. Resuming workers.`,
+    );
   }
 
   public pauseDispatching(): { success: boolean; message: string } {
     this.isSessionStarted = false;
-    this.stateMgr.updateDaemonStatus('idle');
-    this.dashboard.log('Task dispatching paused by developer.');
-    return { success: true, message: 'Task dispatching paused.' };
+    this.stateMgr.updateDaemonStatus("idle");
+    this.dashboard.log("Task dispatching paused by developer.");
+    return { success: true, message: "Task dispatching paused." };
   }
 
   public resumeDispatching(): { success: boolean; message: string } {
     this.isSessionStarted = true;
-    this.stateMgr.updateDaemonStatus('running');
-    this.dashboard.log('Task dispatching resumed by developer.');
+    this.stateMgr.updateDaemonStatus("running");
+    this.dashboard.log("Task dispatching resumed by developer.");
     this.tick().catch(() => {});
-    return { success: true, message: 'Task dispatching resumed.' };
+    return { success: true, message: "Task dispatching resumed." };
   }
 
   public isDispatchingPaused(): boolean {
     return !this.isSessionStarted;
   }
 
-  public async pauseTask(issueNumber: number): Promise<{ success: boolean; message: string }> {
+  public async pauseTask(
+    issueNumber: number,
+  ): Promise<{ success: boolean; message: string }> {
     return await this.pauseWorker(issueNumber);
   }
 
-  public async resumeTask(issueNumber: number): Promise<{ success: boolean; message: string }> {
+  public async resumeTask(
+    issueNumber: number,
+  ): Promise<{ success: boolean; message: string }> {
     return await this.resumeWorker(issueNumber);
   }
 
   public getStatusSummary(): StatusSummary {
     const activeWorkersMap = this.dashboard.getActiveWorkers();
-    const activeWorkersList = Array.from(activeWorkersMap.values()).map((w) => ({
-      issueNumber: w.issueNumber,
-      title: w.title,
-      branchName: w.branchName,
-      status: w.status,
-      runnerName: w.runnerName,
-      startedAt: w.startedAt,
-    }));
+    const activeWorkersList = Array.from(activeWorkersMap.values()).map(
+      (w) => ({
+        issueNumber: w.issueNumber,
+        title: w.title,
+        branchName: w.branchName,
+        status: w.status,
+        runnerName: w.runnerName,
+        startedAt: w.startedAt,
+      }),
+    );
 
     const allNodes = this.dag.getAllNodes();
-    const specNodes = allNodes.filter((n) => n.kind === 'spec');
+    const specNodes = allNodes.filter((n) => n.kind === "spec");
     const allSpecs = specNodes.map((s) => {
       const specInfo = this.dag.isSpecComplete(s.issue.number);
       return {
@@ -1042,7 +1369,9 @@ ${autoMergeStep}
   }
 
   public getTasksSummary(): TasksSummary {
-    const activeWorkers = Array.from(this.dashboard.getActiveWorkers().values());
+    const activeWorkers = Array.from(
+      this.dashboard.getActiveWorkers().values(),
+    );
     const inProgress: TaskItemSummary[] = [];
     const paused: TaskItemSummary[] = [];
 
@@ -1056,8 +1385,10 @@ ${autoMergeStep}
         startedAt: worker.startedAt,
       };
       if (
-        worker.status === 'paused_quota' ||
-        (this.quotaMonitor && worker.runnerName && this.quotaMonitor.isRunnerPaused(worker.runnerName))
+        worker.status === "paused_quota" ||
+        (this.quotaMonitor &&
+          worker.runnerName &&
+          this.quotaMonitor.isRunnerPaused(worker.runnerName))
       ) {
         paused.push(item);
       } else {
@@ -1073,7 +1404,7 @@ ${autoMergeStep}
         issueNumber: n.issue.number,
         title: n.issue.title,
         runnerName: n.runnerName,
-        status: 'ready',
+        status: "ready",
       }));
 
     return {
@@ -1085,7 +1416,7 @@ ${autoMergeStep}
 
   public getSpecsSummary(): SpecsSummary {
     const allNodes = this.dag.getAllNodes();
-    const specNodes = allNodes.filter((n) => n.kind === 'spec');
+    const specNodes = allNodes.filter((n) => n.kind === "spec");
     const specs = specNodes.map((s) => {
       const info = this.dag.isSpecComplete(s.issue.number);
       return {
@@ -1104,13 +1435,21 @@ ${autoMergeStep}
     };
   }
 
-  public async cleanWorktrees(): Promise<{ success: boolean; message: string; count: number }> {
+  public async cleanWorktrees(): Promise<{
+    success: boolean;
+    message: string;
+    count: number;
+  }> {
     const worktrees = await this.worktreeMgr.listActiveWorktrees();
     let count = 0;
     for (const wt of worktrees) {
       if (wt.issueNumber && !this.activeTaskNumbers.has(wt.issueNumber)) {
         try {
-          await this.worktreeMgr.cleanupWorktree(wt.issueNumber, undefined, true);
+          await this.worktreeMgr.cleanupWorktree(
+            wt.issueNumber,
+            undefined,
+            true,
+          );
           count++;
         } catch {}
       }
@@ -1126,7 +1465,7 @@ ${autoMergeStep}
     if (issueNumber === undefined) {
       const active = Array.from(this.activeTaskNumbers);
       if (active.length === 0) {
-        return 'No active worker sessions running.';
+        return "No active worker sessions running.";
       }
       issueNumber = active[0];
     }
@@ -1137,14 +1476,16 @@ ${autoMergeStep}
     if (fs.existsSync(worktreePath)) {
       parts.push(`• Worktree: \`${worktreePath}\``);
       try {
-        const { stdout: diffStat } = await execa('git', ['diff', '--stat'], { cwd: worktreePath });
+        const { stdout: diffStat } = await execa("git", ["diff", "--stat"], {
+          cwd: worktreePath,
+        });
         if (diffStat.trim()) {
-          parts.push('\n*Diff Summary*:', '```', diffStat.trim(), '```');
+          parts.push("\n*Diff Summary*:", "```", diffStat.trim(), "```");
         } else {
-          parts.push('• No uncommitted diffs in worktree.');
+          parts.push("• No uncommitted diffs in worktree.");
         }
       } catch {
-        parts.push('• Unable to retrieve git diff.');
+        parts.push("• Unable to retrieve git diff.");
       }
     } else {
       parts.push(`• No active worktree found at \`${worktreePath}\`.`);
@@ -1161,10 +1502,13 @@ ${autoMergeStep}
       }
     }
 
-    return parts.join('\n');
+    return parts.join("\n");
   }
 
-  public async getLogsSummary(issueNumber: number, tailLines: number = 30): Promise<string> {
+  public async getLogsSummary(
+    issueNumber: number,
+    tailLines: number = 30,
+  ): Promise<string> {
     const session = this.stateMgr.getSession(issueNumber);
     if (!session.metadata && !session.stdout) {
       return `No session logs found for Issue #${issueNumber}.`;
@@ -1172,28 +1516,33 @@ ${autoMergeStep}
 
     const lines: string[] = [];
     if (session.metadata) {
-      lines.push(`Status: ${session.metadata.status} | Branch: ${session.metadata.branchName}`);
+      lines.push(
+        `Status: ${session.metadata.status} | Branch: ${session.metadata.branchName}`,
+      );
     }
     if (session.stdout) {
-      const outLines = session.stdout.split('\n');
-      const tail = outLines.slice(-tailLines).join('\n');
+      const outLines = session.stdout.split("\n");
+      const tail = outLines.slice(-tailLines).join("\n");
       lines.push(tail);
     }
     if (session.stderr && session.stderr.trim()) {
-      const errLines = session.stderr.split('\n');
-      const tail = errLines.slice(-tailLines).join('\n');
+      const errLines = session.stderr.split("\n");
+      const tail = errLines.slice(-tailLines).join("\n");
       lines.push(`\n[Errors]:\n${tail}`);
     }
-    return lines.join('\n');
+    return lines.join("\n");
   }
 
   public async getDetectedProviders(): Promise<ProviderInfo[]> {
-    return detectInstalledProviders(this.config, this.runnerFacade.getRegistry());
+    return detectInstalledProviders(
+      this.config,
+      this.runnerFacade.getRegistry(),
+    );
   }
 
   public async setAllowedProviders(
     allowedProviders: string[],
-    defaultRunner?: string
+    defaultRunner?: string,
   ): Promise<{ success: boolean; message: string; savedPath: string }> {
     this.config.allowedProviders = allowedProviders;
     this.runnerFacade.setAllowedProviders(allowedProviders);
@@ -1208,8 +1557,12 @@ ${autoMergeStep}
       ...(defaultRunner ? { runner: defaultRunner } : {}),
     });
 
-    const runnerMsg = defaultRunner ? ` (default: ${defaultRunner})` : '';
-    const msg = `Updated allowed providers for ${this.config.repository || 'repository'}: ${allowedProviders.length > 0 ? allowedProviders.join(', ') : 'none'}${runnerMsg}`;
+    const runnerMsg = defaultRunner ? ` (default: ${defaultRunner})` : "";
+    const msg = `Updated allowed providers for ${
+      this.config.repository || "repository"
+    }: ${
+      allowedProviders.length > 0 ? allowedProviders.join(", ") : "none"
+    }${runnerMsg}`;
     this.dashboard.log(msg);
 
     return {

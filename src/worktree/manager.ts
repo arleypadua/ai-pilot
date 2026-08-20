@@ -91,11 +91,15 @@ export class WorktreeManager {
     // Prune any stale worktree registrations before adding
     await this.pruneWorktrees();
 
-    // Fetch latest baseBranch
+    // Fetch latest baseBranch from remote
     try {
-      await execa('git', ['fetch', 'origin', baseBranch], { cwd: this.baseDir });
+      await execa('git', ['fetch', 'origin', `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], { cwd: this.baseDir });
     } catch {
-      // Offline or local only branch
+      try {
+        await execa('git', ['fetch', 'origin', baseBranch], { cwd: this.baseDir });
+      } catch {
+        // Offline or local only branch
+      }
     }
 
     // Determine base ref (origin/baseBranch or local baseBranch)
@@ -103,7 +107,12 @@ export class WorktreeManager {
     try {
       await execa('git', ['rev-parse', '--verify', startPoint], { cwd: this.baseDir });
     } catch {
-      startPoint = baseBranch;
+      try {
+        await execa('git', ['rev-parse', '--verify', baseBranch], { cwd: this.baseDir });
+        startPoint = baseBranch;
+      } catch {
+        startPoint = 'HEAD';
+      }
     }
 
     // Check if branch already exists
@@ -116,6 +125,11 @@ export class WorktreeManager {
         await this.pruneWorktrees();
         await execa('git', ['worktree', 'add', '-f', worktreePath, branchName], { cwd: this.baseDir });
       }
+      try {
+        await this.rebaseWorktree(worktreePath, baseBranch);
+      } catch {
+        await this.abortRebase(worktreePath);
+      }
     } else {
       try {
         await execa('git', ['worktree', 'add', '-b', branchName, worktreePath, startPoint], {
@@ -126,6 +140,11 @@ export class WorktreeManager {
         const existsNow = await this.branchExists(branchName);
         if (existsNow) {
           await execa('git', ['worktree', 'add', '-f', worktreePath, branchName], { cwd: this.baseDir });
+          try {
+            await this.rebaseWorktree(worktreePath, baseBranch);
+          } catch {
+            await this.abortRebase(worktreePath);
+          }
         } else {
           await execa('git', ['worktree', 'add', '-f', '-b', branchName, worktreePath, startPoint], {
             cwd: this.baseDir,
@@ -142,9 +161,13 @@ export class WorktreeManager {
     baseBranch: string = 'main'
   ): Promise<{ success: boolean; hasConflicts: boolean; output: string }> {
     try {
-      await execa('git', ['fetch', 'origin', baseBranch], { cwd: worktreePath });
+      await execa('git', ['fetch', 'origin', `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], { cwd: worktreePath });
     } catch {
-      // Continue if offline
+      try {
+        await execa('git', ['fetch', 'origin', baseBranch], { cwd: worktreePath });
+      } catch {
+        // Continue if offline
+      }
     }
 
     let upstream = `origin/${baseBranch}`;
