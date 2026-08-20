@@ -227,6 +227,18 @@ class MockActionController implements RemoteActionController {
       ],
     };
   }
+
+  public async cleanWorktrees(): Promise<{ success: boolean; message: string; count: number }> {
+    return { success: true, message: 'Cleaned up 2 inactive worktrees.', count: 2 };
+  }
+
+  public async getInspectSummary(issueNumber?: number): Promise<string> {
+    return `Inspect summary for #${issueNumber ?? 24}:\n• Worktree: /path/to/worktree\n• Status: running`;
+  }
+
+  public async getLogsSummary(issueNumber: number, tailLines?: number): Promise<string> {
+    return `Logs for #${issueNumber} (tail ${tailLines ?? 30}):\n[Info] Task running...`;
+  }
 }
 
 describe('RemoteControlManager', () => {
@@ -830,6 +842,49 @@ describe('RemoteControlManager', () => {
       expect(actionController.targetSpecs).toEqual([[22], []]);
       expect(provider.editedMessages.length).toBe(2);
       expect(provider.editedMessages[1].messageId).toBe(8);
+    });
+
+    it('/clean command cleans inactive worktrees and replies with formatted count', async () => {
+      await provider.triggerCommand('clean', [], 123456);
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.text).toContain('🧹 *Clean Complete*');
+      expect(msg.text).toContain('Cleaned up 2 inactive worktrees and temporary branches.');
+    });
+
+    it('/inspect <issue> returns diff summary and worker details', async () => {
+      await provider.triggerCommand('inspect', ['24'], 123456);
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.text).toContain('🔍 *Inspection: Issue #24*');
+      expect(msg.text).toContain('• Worktree: /path/to/worktree');
+    });
+
+    it('/inspect without arguments returns inspect usage help', async () => {
+      await provider.triggerCommand('inspect', [], 123456);
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.text).toContain('🔍 *Inspect Usage*');
+    });
+
+    it('/logs <issue> returns recent logs formatted in code block', async () => {
+      await provider.triggerCommand('logs', ['24'], 123456);
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.text).toContain('📜 *Logs: Issue #24*');
+      expect(msg.text).toContain('[Info] Task running...');
+    });
+
+    it('/logs without arguments returns logs usage help', async () => {
+      await provider.triggerCommand('logs', [], 123456);
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.text).toContain('📜 *Logs Usage*');
     });
   });
 });

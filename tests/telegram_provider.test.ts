@@ -356,4 +356,122 @@ describe('TelegramRemoteProvider', () => {
       });
     });
   });
+
+  describe('Dynamic Command Registration (setMyCommands)', () => {
+    it('registers native BOT_COMMANDS with Telegram Bot API', async () => {
+      provider = new TelegramRemoteProvider({
+        bot,
+        rateLimiter,
+        botHandle: '@imagos_backend_bot',
+        allowedChatIds: [123456789],
+        defaultChatId: 123456789,
+      });
+
+      await provider.registerCommands();
+
+      const setMyCommandsCall = apiCalls.find((c) => c.method === 'setMyCommands');
+      expect(setMyCommandsCall).toBeDefined();
+      expect(setMyCommandsCall?.payload.commands).toEqual([
+        { command: 'status', description: 'View active tasks, worktrees & DAG' },
+        { command: 'specs', description: 'List and switch scoped parent specs' },
+        { command: 'resume', description: 'Clear rate-limit pause and resume workers' },
+        { command: 'clean', description: 'Clean inactive worktrees and temp branches' },
+        { command: 'inspect', description: 'Inspect active worker tool calls & diffs' },
+        { command: 'logs', description: 'View recent daemon logs' },
+        { command: 'help', description: 'Show command reference and usage' },
+      ]);
+    });
+
+    it('handles setMyCommands error non-blockingly without throwing', async () => {
+      bot.api.config.use(async (_prev, method) => {
+        if (method === 'setMyCommands') {
+          throw new Error('Telegram network error');
+        }
+        return { ok: true, result: true };
+      });
+
+      provider = new TelegramRemoteProvider({
+        bot,
+        rateLimiter,
+      });
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await expect(provider.registerCommands()).resolves.not.toThrow();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to register Telegram bot commands'));
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe('allowedChatIds Whitelist Authorization', () => {
+    it('allows incoming updates from whitelisted chat IDs', async () => {
+      provider = new TelegramRemoteProvider({
+        bot,
+        rateLimiter,
+        allowedChatIds: [123456789, -1001234567890],
+        defaultChatId: 123456789,
+      });
+
+      let commandHandled = false;
+      provider.onCommand('status', async () => {
+        commandHandled = true;
+      });
+
+      await bot.handleUpdate({
+        update_id: 10,
+        message: {
+          message_id: 100,
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: 123456789, type: 'private' },
+          from: { id: 999, is_bot: false, first_name: 'AuthorizedChat' },
+          text: '/status',
+          entities: [{ type: 'bot_command', offset: 0, length: 7 }],
+        },
+      });
+
+      expect(commandHandled).toBe(true);
+    });
+
+    it('drops incoming updates from non-whitelisted group chats silently', async () => {
+      provider = new TelegramRemoteProvider({
+        bot,
+        rateLimiter,
+        allowedChatIds: [123456789],
+        defaultChatId: 123456789,
+      });
+
+      let commandHandled = false;
+      provider.onCommand('status', async () => {
+        commandHandled = true;
+      });
+
+      await bot.handleUpdate({
+        update_id: 11,
+        message: {
+          message_id: 101,
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: -1009999999999, type: 'supergroup', title: 'Unauthorized Group' },
+          from: { id: 999, is_bot: false, first_name: 'User' },
+          text: '/status',
+          entities: [{ type: 'bot_command', offset: 0, length: 7 }],
+        },
+      });
+
+      expect(commandHandled).toBe(false);
+      // No security notice sent to group
+      const sentMsgs = apiCalls.filter((c) => c.method === 'sendMessage');
+      expect(sentMsgs).toHaveLength(0);
+    });
+
+    it('returns getters for botHandle and allowedChatIds', () => {
+      provider = new TelegramRemoteProvider({
+        bot,
+        rateLimiter,
+        botHandle: '@imagos_custom_bot',
+        allowedChatIds: [555, 666],
+      });
+
+      expect(provider.getBotHandle()).toBe('@imagos_custom_bot');
+      expect(provider.getAllowedChatIds()).toEqual([555, 666]);
+    });
+  });
 });

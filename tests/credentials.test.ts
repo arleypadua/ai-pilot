@@ -4,15 +4,24 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   parseAllowedUserIds,
+  parseAllowedChatIds,
   parseChatId,
   getCredentialsPath,
+  getUserConfigPath,
   loadCredentialsFile,
   saveCredentialsFile,
+  loadUserConfig,
+  saveUserConfig,
+  saveTelegramBot,
+  getTelegramBot,
   saveTelegramCredentials,
   resolveTelegramCredentials,
   CredentialsSchema,
   TelegramCredentialsSchema,
   TelegramRepoCredentialsSchema,
+  UserConfigSchema,
+  GlobalTelegramConfigSchema,
+  TelegramBotConfigSchema,
 } from '../src/config/credentials.js';
 
 describe('Credentials schemas and parser helpers', () => {
@@ -581,6 +590,176 @@ describe('resolveTelegramCredentials across hierarchical tiers', () => {
       expect(resolved.allowedUserIds).toEqual([789]);
       expect(resolved.source.botToken).toBe('process_env');
       expect(resolved.source.allowedUserIds).toBe('process_env');
+    });
+  });
+
+  describe('parseAllowedChatIds helper', () => {
+    it('returns undefined for null, undefined, or empty string', () => {
+      expect(parseAllowedChatIds(undefined)).toBeUndefined();
+      expect(parseAllowedChatIds(null)).toBeUndefined();
+      expect(parseAllowedChatIds('')).toBeUndefined();
+      expect(parseAllowedChatIds('   ')).toBeUndefined();
+    });
+
+    it('parses numbers and string chat IDs including negative group chat IDs', () => {
+      expect(parseAllowedChatIds(123456789)).toEqual([123456789]);
+      expect(parseAllowedChatIds(-1001234567890)).toEqual([-1001234567890]);
+      expect(parseAllowedChatIds('123456789, -1001234567890')).toEqual([123456789, -1001234567890]);
+      expect(parseAllowedChatIds(['123456789', '-1001234567890'])).toEqual([123456789, -1001234567890]);
+    });
+
+    it('parses JSON array of chat IDs', () => {
+      expect(parseAllowedChatIds('[123456789, -1001234567890]')).toEqual([123456789, -1001234567890]);
+    });
+
+    it('deduplicates chat IDs', () => {
+      expect(parseAllowedChatIds([123, 456, 123])).toEqual([123, 456]);
+    });
+  });
+
+  describe('Global User Configuration (~/.imagos/config.json)', () => {
+    it('saves and loads global user config with multi-bot credentials', () => {
+      const userConfig = {
+        telegram: {
+          bots: {
+            '@imagos_backend_bot': {
+              token: 'token-backend-123',
+              allowedChatIds: [123456789],
+            },
+            '@imagos_frontend_bot': {
+              token: 'token-frontend-456',
+              allowedChatIds: [123456789, -1001234567890],
+            },
+          },
+        },
+      };
+
+      const savedPath = saveUserConfig(userConfig, undefined, tmpHomeDir);
+      expect(fs.existsSync(savedPath)).toBe(true);
+
+      const loaded = loadUserConfig(undefined, tmpHomeDir);
+      expect(loaded?.telegram?.bots?.['@imagos_backend_bot']?.token).toBe('token-backend-123');
+      expect(loaded?.telegram?.bots?.['@imagos_backend_bot']?.allowedChatIds).toEqual([123456789]);
+      expect(loaded?.telegram?.bots?.['@imagos_frontend_bot']?.token).toBe('token-frontend-456');
+      expect(loaded?.telegram?.bots?.['@imagos_frontend_bot']?.allowedChatIds).toEqual([123456789, -1001234567890]);
+    });
+
+    it('saveTelegramBot adds and updates bots cleanly in ~/.imagos/config.json', () => {
+      saveTelegramBot('@imagos_backend_bot', { token: 'token-1', allowedChatIds: [111] }, undefined, tmpHomeDir);
+      saveTelegramBot({ botHandle: '@imagos_frontend_bot', token: 'token-2', allowedChatIds: [222], homeDir: tmpHomeDir });
+
+      const bot1 = getTelegramBot('@imagos_backend_bot', undefined, tmpHomeDir);
+      const bot2 = getTelegramBot('imagos_frontend_bot', undefined, tmpHomeDir);
+
+      expect(bot1?.token).toBe('token-1');
+      expect(bot1?.allowedChatIds).toEqual([111]);
+      expect(bot2?.token).toBe('token-2');
+      expect(bot2?.allowedChatIds).toEqual([222]);
+    });
+  });
+
+  describe('Multi-Bot Resolution & Fail-Fast Validation (Issue #35)', () => {
+    it('resolves bot credentials from ~/.imagos/config.json when telegram.bot is defined in repo config', () => {
+      saveTelegramBot('@imagos_backend_bot', { token: 'backend-token', allowedChatIds: [123456789] }, undefined, tmpHomeDir);
+
+      const resolved = resolveTelegramCredentials({
+        homeDir: tmpHomeDir,
+        cwd: tmpRepoDir,
+        config: {
+          telegram: {
+            enabled: true,
+            bot: '@imagos_backend_bot',
+          },
+        },
+      });
+
+      expect(resolved.botHandle).toBe('@imagos_backend_bot');
+      expect(resolved.botToken).toBe('backend-token');
+      expect(resolved.allowedChatIds).toEqual([123456789]);
+      expect(resolved.source.botToken).toBe('user_config');
+    });
+
+    it('isolates different bots for simultaneous backend and frontend repos without collisions', () => {
+      saveTelegramBot('@imagos_backend_bot', { token: 'backend-token', allowedChatIds: [100] }, undefined, tmpHomeDir);
+      saveTelegramBot('@imagos_frontend_bot', { token: 'frontend-token', allowedChatIds: [200, -1001] }, undefined, tmpHomeDir);
+
+      const backendResolved = resolveTelegramCredentials({
+        homeDir: tmpHomeDir,
+        cwd: tmpRepoDir,
+        config: {
+          telegram: {
+            enabled: true,
+            bot: '@imagos_backend_bot',
+          },
+        },
+      });
+
+      const frontendResolved = resolveTelegramCredentials({
+        homeDir: tmpHomeDir,
+        cwd: tmpRepoDir,
+        config: {
+          telegram: {
+            enabled: true,
+            bot: '@imagos_frontend_bot',
+          },
+        },
+      });
+
+      expect(backendResolved.botToken).toBe('backend-token');
+      expect(backendResolved.allowedChatIds).toEqual([100]);
+      expect(frontendResolved.botToken).toBe('frontend-token');
+      expect(frontendResolved.allowedChatIds).toEqual([200, -1001]);
+    });
+
+    it('throws fail-fast error when Telegram is enabled but no telegram.bot is defined', () => {
+      expect(() =>
+        resolveTelegramCredentials({
+          homeDir: tmpHomeDir,
+          cwd: tmpRepoDir,
+          config: {
+            telegram: {
+              enabled: true,
+            },
+          },
+        })
+      ).toThrow("Telegram is enabled, but no 'telegram.bot' handle is defined in .autopilot/config.json.");
+    });
+
+    it('throws fail-fast error when bot handle is not found in ~/.imagos/config.json', () => {
+      expect(() =>
+        resolveTelegramCredentials({
+          homeDir: tmpHomeDir,
+          cwd: tmpRepoDir,
+          config: {
+            telegram: {
+              enabled: true,
+              bot: '@non_existent_bot',
+            },
+          },
+        })
+      ).toThrow("Bot handle '@non_existent_bot' not found in ~/.imagos/config.json. Run 'imagos init' to configure it.");
+    });
+
+    it('prioritizes IMAGOS_TELEGRAM_BOT_TOKEN environment variable override', () => {
+      saveTelegramBot('@imagos_backend_bot', { token: 'config-token', allowedChatIds: [123456789] }, undefined, tmpHomeDir);
+
+      const resolved = resolveTelegramCredentials({
+        homeDir: tmpHomeDir,
+        cwd: tmpRepoDir,
+        config: {
+          telegram: {
+            enabled: true,
+            bot: '@imagos_backend_bot',
+          },
+        },
+        env: {
+          IMAGOS_TELEGRAM_BOT_TOKEN: 'override-token-999',
+        },
+      });
+
+      expect(resolved.botToken).toBe('override-token-999');
+      expect(resolved.source.botToken).toBe('env_override');
+      expect(resolved.allowedChatIds).toEqual([123456789]);
     });
   });
 });

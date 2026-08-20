@@ -8,9 +8,21 @@ import type {
 } from './types.js';
 import { TelegramRateLimiter } from './rate_limiter.js';
 
+export const BOT_COMMANDS = [
+  { command: 'status', description: 'View active tasks, worktrees & DAG' },
+  { command: 'specs', description: 'List and switch scoped parent specs' },
+  { command: 'resume', description: 'Clear rate-limit pause and resume workers' },
+  { command: 'clean', description: 'Clean inactive worktrees and temp branches' },
+  { command: 'inspect', description: 'Inspect active worker tool calls & diffs' },
+  { command: 'logs', description: 'View recent daemon logs' },
+  { command: 'help', description: 'Show command reference and usage' },
+];
+
 export class TelegramRemoteProvider implements RemoteControlProvider {
   public readonly name = 'telegram';
   private bot: Bot;
+  private botHandle?: string;
+  private allowedChatIds?: (number | string)[];
   private allowedUserIds?: number[];
   private defaultChatId?: number | string;
   private rateLimiter: TelegramRateLimiter;
@@ -23,6 +35,8 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
   private commandHandlers: Map<string, (args: string[], userId: number) => Promise<void>> = new Map();
 
   constructor(options: TelegramRemoteProviderOptions) {
+    this.botHandle = options.botHandle;
+    this.allowedChatIds = options.allowedChatIds;
     this.allowedUserIds = options.allowedUserIds;
     this.defaultChatId = options.defaultChatId;
     this.rateLimiter = options.rateLimiter ?? new TelegramRateLimiter();
@@ -46,6 +60,10 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
     return this.bot;
   }
 
+  public getBotHandle(): string | undefined {
+    return this.botHandle;
+  }
+
   public getRateLimiter(): TelegramRateLimiter {
     return this.rateLimiter;
   }
@@ -58,34 +76,76 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
     return this.allowedUserIds;
   }
 
+  public getAllowedChatIds(): (number | string)[] | undefined {
+    return this.allowedChatIds;
+  }
+
+  public async registerCommands(): Promise<void> {
+    try {
+      await this.bot.api.setMyCommands(BOT_COMMANDS);
+    } catch (err: any) {
+      console.warn(`Warning: Failed to register Telegram bot commands: ${err?.message || err}`);
+    }
+  }
+
   private setupMiddleware(): void {
     // 1. Authorization Whitelist Middleware
     this.bot.use(async (ctx: Context, next: NextFunction) => {
-      if (!this.allowedUserIds || this.allowedUserIds.length === 0) {
-        return next();
-      }
-
-      const userId = ctx.from?.id;
-      if (userId !== undefined && this.allowedUserIds.includes(userId)) {
-        return next();
-      }
-
-      // Unauthorized sender
+      const chatId = ctx.chat?.id;
       const isPrivate = ctx.chat?.type === 'private';
-      if (isPrivate && ctx.chat?.id) {
-        try {
-          await this.rateLimiter.enqueue(ctx.chat.id, () =>
-            this.bot.api.sendMessage(
-              ctx.chat!.id,
-              `🔒 *Unauthorized*: Your Telegram User ID (\`${userId ?? 'unknown'}\`) is not whitelisted to control this Imagos instance.`,
-              { parse_mode: 'Markdown' }
-            )
-          );
-        } catch {
-          // Ignore failure to reply to unauthorized user
+
+      // 1a. Check allowedChatIds if configured
+      if (this.allowedChatIds && this.allowedChatIds.length > 0) {
+        const isChatAllowed =
+          chatId !== undefined &&
+          (this.allowedChatIds.includes(chatId) ||
+            this.allowedChatIds.includes(String(chatId)) ||
+            this.allowedChatIds.map(String).includes(String(chatId)));
+
+        if (!isChatAllowed) {
+          if (isPrivate && ctx.chat?.id) {
+            try {
+              await this.rateLimiter.enqueue(ctx.chat.id, () =>
+                this.bot.api.sendMessage(
+                  ctx.chat!.id,
+                  `🔒 *Unauthorized*: This chat (\`${chatId ?? 'unknown'}\`) is not authorized to control this Imagos instance.`,
+                  { parse_mode: 'Markdown' }
+                )
+              );
+            } catch {
+              // Ignore failure to reply to unauthorized chat
+            }
+          }
+          // Silently drop update
+          return;
         }
       }
-      // Drop unauthorized message (do not call next())
+
+      // 1b. Check allowedUserIds if configured
+      if (this.allowedUserIds && this.allowedUserIds.length > 0) {
+        const userId = ctx.from?.id;
+        const isUserAllowed = userId !== undefined && this.allowedUserIds.includes(userId);
+
+        if (!isUserAllowed) {
+          if (isPrivate && ctx.chat?.id) {
+            try {
+              await this.rateLimiter.enqueue(ctx.chat.id, () =>
+                this.bot.api.sendMessage(
+                  ctx.chat!.id,
+                  `🔒 *Unauthorized*: Your Telegram User ID (\`${userId ?? 'unknown'}\`) is not whitelisted to control this Imagos instance.`,
+                  { parse_mode: 'Markdown' }
+                )
+              );
+            } catch {
+              // Ignore failure to reply to unauthorized user
+            }
+          }
+          // Silently drop update
+          return;
+        }
+      }
+
+      return next();
     });
 
     // 2. Callback query handling for interactive actions
@@ -260,6 +320,12 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
   public async start(): Promise<void> {
     if (this.isRunning) return;
     this.isRunning = true;
+
+    try {
+      await this.registerCommands();
+    } catch (err: any) {
+      console.warn(`Warning: Failed to register Telegram bot commands: ${err?.message || err}`);
+    }
 
     try {
       this.bot

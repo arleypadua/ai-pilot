@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { execa } from 'execa';
 import type { AutoPilotConfig, DAGNode } from '../types/index.js';
 import { GitHubClient } from '../github/client.js';
@@ -58,7 +59,7 @@ export class Orchestrator implements RemoteActionController {
     this.stateMgr = new StateManager();
 
     // Setup remote control if enabled
-    if (this.config.remote?.enabled) {
+    if (this.config.remote?.enabled || this.config.telegram?.enabled) {
       try {
         const creds = resolveTelegramCredentials({
           config: this.config,
@@ -67,6 +68,8 @@ export class Orchestrator implements RemoteActionController {
         if (creds.botToken) {
           const provider = new TelegramRemoteProvider({
             botToken: creds.botToken,
+            botHandle: creds.botHandle,
+            allowedChatIds: creds.allowedChatIds,
             allowedUserIds: creds.allowedUserIds,
             defaultChatId: creds.defaultChatId,
           });
@@ -74,7 +77,7 @@ export class Orchestrator implements RemoteActionController {
             provider,
             repository: this.config.repository,
             defaultChatId: creds.defaultChatId,
-            notifications: this.config.remote.telegram.notifications,
+            notifications: this.config.remote?.telegram?.notifications ?? this.config.telegram?.notifications,
             eventBus: this.eventBus,
             actionController: this,
             quotaMonitor: this.quotaMonitor,
@@ -82,6 +85,7 @@ export class Orchestrator implements RemoteActionController {
         }
       } catch (err: any) {
         this.dashboard.log(`Failed to initialize remote control provider: ${err.message}`);
+        throw err;
       }
     }
 
@@ -1077,5 +1081,88 @@ ${autoMergeStep}
       targetSpecs: this.dag.getTargetSpecs(),
       specs,
     };
+  }
+
+  public async cleanWorktrees(): Promise<{ success: boolean; message: string; count: number }> {
+    const worktrees = await this.worktreeMgr.listActiveWorktrees();
+    let count = 0;
+    for (const wt of worktrees) {
+      if (wt.issueNumber && !this.activeTaskNumbers.has(wt.issueNumber)) {
+        try {
+          await this.worktreeMgr.cleanupWorktree(wt.issueNumber, undefined, true);
+          count++;
+        } catch {}
+      }
+    }
+    return {
+      success: true,
+      message: `Cleaned up ${count} inactive worktrees.`,
+      count,
+    };
+  }
+
+  public async getInspectSummary(issueNumber?: number): Promise<string> {
+    if (issueNumber === undefined) {
+      const active = Array.from(this.activeTaskNumbers);
+      if (active.length === 0) {
+        return 'No active worker sessions running.';
+      }
+      issueNumber = active[0];
+    }
+
+    const worktreePath = this.worktreeMgr.getWorktreePathForIssue(issueNumber);
+    const parts: string[] = [`*Issue #${issueNumber}*`];
+
+    if (fs.existsSync(worktreePath)) {
+      parts.push(`• Worktree: \`${worktreePath}\``);
+      try {
+        const { stdout: diffStat } = await execa('git', ['diff', '--stat'], { cwd: worktreePath });
+        if (diffStat.trim()) {
+          parts.push('\n*Diff Summary*:', '```', diffStat.trim(), '```');
+        } else {
+          parts.push('• No uncommitted diffs in worktree.');
+        }
+      } catch {
+        parts.push('• Unable to retrieve git diff.');
+      }
+    } else {
+      parts.push(`• No active worktree found at \`${worktreePath}\`.`);
+    }
+
+    const session = this.stateMgr.getSession(issueNumber);
+    if (session?.metadata) {
+      parts.push(`• Status: \`${session.metadata.status}\``);
+      if (session.metadata.runner) {
+        parts.push(`• Runner: \`${session.metadata.runner}\``);
+      }
+      if (session.metadata.branchName) {
+        parts.push(`• Branch: \`${session.metadata.branchName}\``);
+      }
+    }
+
+    return parts.join('\n');
+  }
+
+  public async getLogsSummary(issueNumber: number, tailLines: number = 30): Promise<string> {
+    const session = this.stateMgr.getSession(issueNumber);
+    if (!session.metadata && !session.stdout) {
+      return `No session logs found for Issue #${issueNumber}.`;
+    }
+
+    const lines: string[] = [];
+    if (session.metadata) {
+      lines.push(`Status: ${session.metadata.status} | Branch: ${session.metadata.branchName}`);
+    }
+    if (session.stdout) {
+      const outLines = session.stdout.split('\n');
+      const tail = outLines.slice(-tailLines).join('\n');
+      lines.push(tail);
+    }
+    if (session.stderr && session.stderr.trim()) {
+      const errLines = session.stderr.split('\n');
+      const tail = errLines.slice(-tailLines).join('\n');
+      lines.push(`\n[Errors]:\n${tail}`);
+    }
+    return lines.join('\n');
   }
 }
