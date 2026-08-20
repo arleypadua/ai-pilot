@@ -1,4 +1,5 @@
 import { execa } from 'execa';
+import { ActivityLogger } from '../logger/index.js';
 import type { GitHubIssue } from '../types/index.js';
 
 /**
@@ -390,7 +391,7 @@ export class GitHubClient {
           return;
         } catch {
           // Log failure gracefully without crashing caller
-          console.warn(`Warning: Could not update labels for issue #${issueNumber}: ${err.message}`);
+          ActivityLogger.warn(`Warning: Could not update labels for issue #${issueNumber}: ${err.message}`);
         }
       }
     }

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Bot } from 'grammy';
 import { TelegramRemoteProvider } from '../src/remote/telegram.js';
 import { TelegramRateLimiter } from '../src/remote/rate_limiter.js';
+import { ActivityLogger } from '../src/logger/index.js';
 
 describe('TelegramRemoteProvider', () => {
   const dummyBotInfo = {
@@ -395,7 +396,7 @@ describe('TelegramRemoteProvider', () => {
         rateLimiter,
       });
 
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(ActivityLogger, 'warn').mockImplementation(() => {});
       await expect(provider.registerCommands()).resolves.not.toThrow();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to register Telegram bot commands'));
       warnSpy.mockRestore();

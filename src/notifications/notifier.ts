@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import pc from 'picocolors';
+import { ActivityLogger } from '../logger/index.js';
 import type {
   TaskStartedNotificationPayload,
   TaskCompletedNotificationPayload,
@@ -20,6 +21,7 @@ export class Notifier {
 
   public static setLogHandler(handler?: (message: string) => void): void {
     Notifier.logHandler = handler;
+    ActivityLogger.setLogHandler(handler);
   }
 
   public static setInteractive(interactive: boolean): void {
@@ -43,8 +45,10 @@ export class Notifier {
       try {
         Notifier.logHandler(rawMessage);
       } catch {}
+    } else {
+      ActivityLogger.log(rawMessage);
     }
-    if (!Notifier.isInteractive) {
+    if (!Notifier.isInteractive && !ActivityLogger.isConsoleIntercepted()) {
       console.log(formattedCliMessage || rawMessage);
     }
   }

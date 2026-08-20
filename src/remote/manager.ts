@@ -19,6 +19,7 @@ import type {
 import type { TelegramNotificationsConfig } from '../types/index.js';
 import { AgentEventBus, type AgentEvent } from '../events/bus.js';
 import { Notifier } from '../notifications/notifier.js';
+import { ActivityLogger } from '../logger/index.js';
 import {
   formatTaskStarted,
   formatTaskCompleted,
@@ -97,32 +98,32 @@ export class RemoteControlManager {
 
     this.boundOnTaskStarted = (payload) => {
       this.handleTaskStarted(payload).catch((err) => {
-        console.error('RemoteControlManager error handling task_started:', err);
+        ActivityLogger.error('RemoteControlManager error handling task_started:', err);
       });
     };
     this.boundOnTaskCompleted = (payload) => {
       this.handleTaskCompleted(payload).catch((err) => {
-        console.error('RemoteControlManager error handling task_completed:', err);
+        ActivityLogger.error('RemoteControlManager error handling task_completed:', err);
       });
     };
     this.boundOnSpecCompleted = (payload) => {
       this.handleSpecCompleted(payload).catch((err) => {
-        console.error('RemoteControlManager error handling spec_completed:', err);
+        ActivityLogger.error('RemoteControlManager error handling spec_completed:', err);
       });
     };
     this.boundOnNeedsInfo = (payload) => {
       this.handleNeedsInfo(payload).catch((err) => {
-        console.error('RemoteControlManager error handling needs_info:', err);
+        ActivityLogger.error('RemoteControlManager error handling needs_info:', err);
       });
     };
     this.boundOnQuotaPaused = (payload) => {
       this.handleQuotaPaused(payload).catch((err) => {
-        console.error('RemoteControlManager error handling quota_paused:', err);
+        ActivityLogger.error('RemoteControlManager error handling quota_paused:', err);
       });
     };
     this.boundOnQuotaResumed = (payload) => {
       this.handleQuotaResumed(payload).catch((err) => {
-        console.error('RemoteControlManager error handling quota_resumed:', err);
+        ActivityLogger.error('RemoteControlManager error handling quota_resumed:', err);
       });
     };
     if (this.quotaMonitor) {
@@ -132,12 +133,12 @@ export class RemoteControlManager {
             (60 * 1000)
         );
         this.handleQuotaPaused({ resetAt: new Date(resetAt), waitMinutes, runnerName }).catch((err) => {
-          console.error('RemoteControlManager error handling quota_monitor paused:', err);
+          ActivityLogger.error('RemoteControlManager error handling quota_monitor paused:', err);
         });
       };
       this.boundOnQuotaMonitorResumed = ({ runnerName }: any) => {
         this.handleQuotaResumed({ runnerName }).catch((err) => {
-          console.error('RemoteControlManager error handling quota_monitor resumed:', err);
+          ActivityLogger.error('RemoteControlManager error handling quota_monitor resumed:', err);
         });
       };
     }
@@ -439,7 +440,7 @@ export class RemoteControlManager {
           actions: [],
         });
       } catch (err: any) {
-        console.error(`RemoteControlManager: failed to edit message #${activeInfo.messageId}:`, err);
+        ActivityLogger.error(`RemoteControlManager: failed to edit message #${activeInfo.messageId}:`, err);
       }
     }
 
@@ -447,7 +448,7 @@ export class RemoteControlManager {
       try {
         await this.actionController.replyToNeedsInfo(issueNumber, answerText);
       } catch (err: any) {
-        console.error(`RemoteControlManager: error in replyToNeedsInfo for issue #${issueNumber}:`, err);
+        ActivityLogger.error(`RemoteControlManager: error in replyToNeedsInfo for issue #${issueNumber}:`, err);
       }
     }
   }
@@ -478,14 +479,14 @@ export class RemoteControlManager {
         actions: [],
       });
     } catch (err: any) {
-      console.error(`RemoteControlManager: failed to edit message #${activeInfo.messageId}:`, err);
+      ActivityLogger.error(`RemoteControlManager: failed to edit message #${activeInfo.messageId}:`, err);
     }
 
     if (this.actionController) {
       try {
         await this.actionController.replyToNeedsInfo(activeInfo.issueNumber, text);
       } catch (err: any) {
-        console.error(`RemoteControlManager: error in replyToNeedsInfo for issue #${activeInfo.issueNumber}:`, err);
+        ActivityLogger.error(`RemoteControlManager: error in replyToNeedsInfo for issue #${activeInfo.issueNumber}:`, err);
       }
     }
   }
@@ -577,7 +578,7 @@ export class RemoteControlManager {
           actions: [],
         });
       } catch (err: any) {
-        console.error('Failed to edit message inline on quota resume:', err);
+        ActivityLogger.error('Failed to edit message inline on quota resume:', err);
       }
     }
 
@@ -830,7 +831,7 @@ export class RemoteControlManager {
         const res = await this.actionController.cleanWorktrees();
         count = res.count ?? 0;
       } catch (err: any) {
-        console.error('RemoteControlManager error executing cleanWorktrees:', err);
+        ActivityLogger.error('RemoteControlManager error executing cleanWorktrees:', err);
       }
     }
     const text = formatCleanResult(this.repository, count);
@@ -857,7 +858,7 @@ export class RemoteControlManager {
           });
           return;
         } catch (err: any) {
-          console.error(`RemoteControlManager error executing getInspectSummary for #${issueNum}:`, err);
+          ActivityLogger.error(`RemoteControlManager error executing getInspectSummary for #${issueNum}:`, err);
         }
       }
     }
@@ -886,7 +887,7 @@ export class RemoteControlManager {
           });
           return;
         } catch (err: any) {
-          console.error(`RemoteControlManager error executing getLogsSummary for #${issueNum}:`, err);
+          ActivityLogger.error(`RemoteControlManager error executing getLogsSummary for #${issueNum}:`, err);
         }
       }
     }
@@ -929,7 +930,7 @@ export class RemoteControlManager {
           actions: actions.length > 0 ? actions : [],
         });
       } catch (err: any) {
-        console.error('RemoteControlManager: failed to edit tasks message inline:', err);
+        ActivityLogger.error('RemoteControlManager: failed to edit tasks message inline:', err);
       }
     } else {
       const text = formatTaskActionResponse(this.repository, parsed.action, parsed.issueNumber, result);
@@ -970,7 +971,7 @@ export class RemoteControlManager {
           actions: actions.length > 0 ? actions : [],
         });
       } catch (err: any) {
-        console.error('RemoteControlManager: failed to edit specs message inline:', err);
+        ActivityLogger.error('RemoteControlManager: failed to edit specs message inline:', err);
       }
     } else {
       const updateText = formatSpecsUpdated(this.repository, parsed.specNumbers);

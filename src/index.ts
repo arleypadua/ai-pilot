@@ -16,4 +16,5 @@ export * from './pipeline/orchestrator.js';
 export * from './ui/dashboard.js';
 export * from './state/manager.js';
 export * from './remote/index.js';
+export * from './logger/index.js';
 export * from './ui/tui/ProvidersPickerView.js';

@@ -7,6 +7,7 @@ import type {
   ActionContext,
 } from './types.js';
 import { TelegramRateLimiter } from './rate_limiter.js';
+import { ActivityLogger } from '../logger/index.js';
 
 export const BOT_COMMANDS = [
   { command: 'status', description: 'View active tasks, worktrees & DAG' },
@@ -84,7 +85,7 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
     try {
       await this.bot.api.setMyCommands(BOT_COMMANDS);
     } catch (err: any) {
-      console.warn(`Warning: Failed to register Telegram bot commands: ${err?.message || err}`);
+      ActivityLogger.warn(`Warning: Failed to register Telegram bot commands: ${err?.message || err}`);
     }
   }
 
@@ -171,7 +172,7 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
           try {
             await handler(prefix, data, userId, context);
           } catch (err: any) {
-            console.error(`Error handling action "${data}":`, err);
+            ActivityLogger.error(`Error handling action "${data}":`, err);
           }
           break;
         }
@@ -193,7 +194,7 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
           try {
             await handler(replyTo.message_id, text, userId);
           } catch (err: any) {
-            console.error('Error handling text reply:', err);
+            ActivityLogger.error('Error handling text reply:', err);
           }
         }
       }
@@ -324,7 +325,7 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
     try {
       await this.registerCommands();
     } catch (err: any) {
-      console.warn(`Warning: Failed to register Telegram bot commands: ${err?.message || err}`);
+      ActivityLogger.warn(`Warning: Failed to register Telegram bot commands: ${err?.message || err}`);
     }
 
     try {
@@ -334,7 +335,7 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
         })
         .catch((err) => {
           if (this.isRunning) {
-            console.error('Telegram bot polling error:', err);
+            ActivityLogger.error('Telegram bot polling error:', err);
           }
         });
     } catch (err: any) {

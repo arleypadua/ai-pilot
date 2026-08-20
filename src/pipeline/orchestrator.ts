@@ -8,6 +8,7 @@ import { QuotaMonitor } from '../quota/monitor.js';
 import { RunnerRegistry, detectInstalledProviders } from '../runners/registry.js';
 import { RunnerFacade } from '../runners/facade.js';
 import { Notifier } from '../notifications/notifier.js';
+import { ActivityLogger } from '../logger/index.js';
 import { Dashboard } from '../ui/dashboard.js';
 import { StateManager } from '../state/manager.js';
 import { AgentEventBus } from '../events/bus.js';
@@ -60,7 +61,8 @@ export class Orchestrator implements RemoteActionController {
     this.dashboard = new Dashboard(config);
     this.stateMgr = new StateManager();
 
-    // Route Notifier milestone alerts into dashboard activity log
+    // Route ActivityLogger and Notifier milestone alerts into dashboard activity log
+    ActivityLogger.setLogHandler((msg) => this.dashboard.log(msg));
     Notifier.setLogHandler((msg) => this.dashboard.log(msg));
 
     // Setup remote control if enabled
@@ -123,6 +125,7 @@ export class Orchestrator implements RemoteActionController {
     this.isInteractive = interactive;
     Notifier.setInteractive(interactive);
     if (interactive) {
+      ActivityLogger.setLogHandler((msg) => this.dashboard.log(msg));
       Notifier.setLogHandler((msg) => this.dashboard.log(msg));
     }
   }

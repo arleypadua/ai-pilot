@@ -25,8 +25,11 @@ export class Dashboard {
   }
 
   public log(message: string): void {
-    const time = new Date().toLocaleTimeString();
-    this.logs.push(`[${time}] ${message}`);
+    const timestampRegex = /^\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?\]/i;
+    const formatted = timestampRegex.test(message)
+      ? message
+      : `[${new Date().toLocaleTimeString()}] ${message}`;
+    this.logs.push(formatted);
     if (this.logs.length > 200) {
       this.logs.shift();
     }
