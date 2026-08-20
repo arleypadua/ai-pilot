@@ -194,6 +194,17 @@ export interface SaveTelegramCredentialsOptions {
   homeDir?: string;
 }
 
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  displayName: string;
+  binaryName?: string;
+  description: string;
+  isInstalled: boolean;
+  isAllowed: boolean;
+  isDefault: boolean;
+}
+
 export interface AutoPilotConfig {
   repository?: string;
   targetSpec?: number | number[];
@@ -207,6 +218,8 @@ export interface AutoPilotConfig {
   extraPrompt?: string;
   runner: string;
   runnerConfig?: RunnerConfig;
+  allowedProviders?: string[];
+  allowedRunners?: string[];
   customRunnerCommand?: string;
   autoMerge: boolean;
   mergeMethod: 'squash' | 'merge' | 'rebase';

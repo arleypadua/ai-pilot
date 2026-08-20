@@ -68,4 +68,57 @@ describe('RunnerFacade', () => {
     const detected = await registry.detectAvailable();
     expect(Array.isArray(detected)).toBe(true);
   });
+
+  describe('allowedProviders filtering', () => {
+    it('should allow all registered providers by default when allowedProviders is undefined', () => {
+      const facade = new RunnerFacade({ defaultRunner: 'claude' });
+      expect(facade.isProviderAllowed('claude')).toBe(true);
+      expect(facade.isProviderAllowed('agy')).toBe(true);
+    });
+
+    it('should respect allowedProviders restriction', () => {
+      const facade = new RunnerFacade({
+        defaultRunner: 'claude',
+        allowedProviders: ['claude'],
+      });
+
+      expect(facade.isProviderAllowed('claude')).toBe(true);
+      expect(facade.isProviderAllowed('agy')).toBe(false);
+    });
+
+    it('should fall back to default runner when issue requests a disallowed runner', () => {
+      const facade = new RunnerFacade({
+        defaultRunner: 'claude',
+        allowedProviders: ['claude'],
+      });
+      const issue = createMockIssue(['ready-for-agent', 'runner:agy']);
+
+      const runnerName = facade.resolveRunnerName(issue);
+      expect(runnerName).toBe('claude');
+    });
+
+    it('should fall back to first allowed provider if default runner is also disallowed', () => {
+      const facade = new RunnerFacade({
+        defaultRunner: 'claude',
+        allowedProviders: ['agy'],
+      });
+      const issue = createMockIssue(['ready-for-agent', 'runner:claude']);
+
+      const runnerName = facade.resolveRunnerName(issue);
+      expect(runnerName).toBe('agy');
+    });
+
+    it('should dynamically update allowed providers and default runner', () => {
+      const facade = new RunnerFacade({ defaultRunner: 'claude' });
+      expect(facade.isProviderAllowed('agy')).toBe(true);
+
+      facade.setAllowedProviders(['agy']);
+      expect(facade.isProviderAllowed('claude')).toBe(false);
+      expect(facade.isProviderAllowed('agy')).toBe(true);
+
+      facade.setDefaultRunner('agy');
+      expect(facade.getDefaultRunner()).toBe('agy');
+    });
+  });
 });
+

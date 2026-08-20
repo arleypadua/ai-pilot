@@ -1,16 +1,17 @@
 import { execa } from 'execa';
-import type { AutoPilotConfig, DAGNode } from '../types/index.js';
+import type { AutoPilotConfig, DAGNode, ProviderInfo } from '../types/index.js';
 import { GitHubClient } from '../github/client.js';
 import { IssueDAG } from '../github/dag.js';
 import { WorktreeManager } from '../worktree/manager.js';
 import { QuotaMonitor } from '../quota/monitor.js';
-import { RunnerRegistry } from '../runners/registry.js';
+import { RunnerRegistry, detectInstalledProviders } from '../runners/registry.js';
 import { RunnerFacade } from '../runners/facade.js';
 import { Notifier } from '../notifications/notifier.js';
 import { Dashboard } from '../ui/dashboard.js';
 import { StateManager } from '../state/manager.js';
 import { AgentEventBus } from '../events/bus.js';
 import { resolveTelegramCredentials } from '../config/credentials.js';
+import { saveConfig } from '../config/schema.js';
 import { TelegramRemoteProvider } from '../remote/telegram.js';
 import { RemoteControlManager } from '../remote/manager.js';
 import type {
@@ -53,9 +54,13 @@ export class Orchestrator implements RemoteActionController {
       quotaMonitor: this.quotaMonitor,
       defaultRunner: config.runner,
       runnerConfig: config.runnerConfig,
+      allowedProviders: config.allowedProviders || config.allowedRunners,
     });
     this.dashboard = new Dashboard(config);
     this.stateMgr = new StateManager();
+
+    // Route Notifier milestone alerts into dashboard activity log
+    Notifier.setLogHandler((msg) => this.dashboard.log(msg));
 
     // Setup remote control if enabled
     if (this.config.remote?.enabled) {
@@ -108,6 +113,10 @@ export class Orchestrator implements RemoteActionController {
 
   public setInteractive(interactive: boolean): void {
     this.isInteractive = interactive;
+    Notifier.setInteractive(interactive);
+    if (interactive) {
+      Notifier.setLogHandler((msg) => this.dashboard.log(msg));
+    }
   }
 
   public onTick(listener: () => void): () => void {
@@ -293,10 +302,11 @@ export class Orchestrator implements RemoteActionController {
       return;
     }
 
-    // Filter tasks whose assigned runner is not currently paused due to quota
+    // Filter tasks whose assigned runner is allowed and not currently paused due to quota
     const unpausedNodes = readyNodes.filter((node) => {
       const runnerName = this.runnerFacade.resolveRunnerName(node.issue, this.config.runner);
-      return !this.quotaMonitor.isRunnerPaused(runnerName);
+      const isAllowed = this.runnerFacade.isProviderAllowed(runnerName);
+      return isAllowed && !this.quotaMonitor.isRunnerPaused(runnerName);
     });
 
     if (unpausedNodes.length === 0) {
@@ -1076,6 +1086,38 @@ ${autoMergeStep}
     return {
       targetSpecs: this.dag.getTargetSpecs(),
       specs,
+    };
+  }
+
+  public async getDetectedProviders(): Promise<ProviderInfo[]> {
+    return detectInstalledProviders(this.config, this.runnerFacade.getRegistry());
+  }
+
+  public async setAllowedProviders(
+    allowedProviders: string[],
+    defaultRunner?: string
+  ): Promise<{ success: boolean; message: string; savedPath: string }> {
+    this.config.allowedProviders = allowedProviders;
+    this.runnerFacade.setAllowedProviders(allowedProviders);
+
+    if (defaultRunner) {
+      this.config.runner = defaultRunner;
+      this.runnerFacade.setDefaultRunner(defaultRunner);
+    }
+
+    const savedPath = saveConfig({
+      allowedProviders,
+      ...(defaultRunner ? { runner: defaultRunner } : {}),
+    });
+
+    const runnerMsg = defaultRunner ? ` (default: ${defaultRunner})` : '';
+    const msg = `Updated allowed providers for ${this.config.repository || 'repository'}: ${allowedProviders.length > 0 ? allowedProviders.join(', ') : 'none'}${runnerMsg}`;
+    this.dashboard.log(msg);
+
+    return {
+      success: true,
+      message: msg,
+      savedPath,
     };
   }
 }

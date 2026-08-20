@@ -54,6 +54,8 @@ export const AutoPilotConfigSchema = z.object({
   extraPrompt: z.string().optional(),
   runner: z.enum(['claude', 'agy', 'pi', 'custom']).default('claude'),
   runnerConfig: RunnerConfigSchema.optional(),
+  allowedProviders: z.array(z.string()).optional(),
+  allowedRunners: z.array(z.string()).optional(),
   customRunnerCommand: z.string().optional(),
   autoMerge: z.boolean().default(true),
   mergeMethod: z.enum(['squash', 'merge', 'rebase']).default('squash'),
@@ -155,13 +157,25 @@ export function saveConfig(
   targetPath?: string,
   cwd: string = process.cwd()
 ): string {
-  const dest = targetPath ? path.resolve(cwd, targetPath) : path.resolve(cwd, '.autopilot', 'config.json');
+  const dest = targetPath ? path.resolve(cwd, targetPath) : getConfigPath(cwd);
   const parentDir = path.dirname(dest);
   if (!fs.existsSync(parentDir)) {
     fs.mkdirSync(parentDir, { recursive: true });
   }
 
-  const serialized = JSON.stringify(config, null, 2);
+  let existing: Record<string, unknown> = {};
+  if (fs.existsSync(dest)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(dest, 'utf8'));
+    } catch {}
+  }
+
+  const merged = {
+    ...existing,
+    ...config,
+  };
+
+  const serialized = JSON.stringify(merged, null, 2);
   fs.writeFileSync(dest, serialized, 'utf8');
   ensureGitIgnoreRules(cwd);
   return dest;

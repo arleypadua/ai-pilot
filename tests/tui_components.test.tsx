@@ -7,6 +7,7 @@ import { UsageView } from '../src/ui/tui/UsageView.js';
 import { SpecPickerView } from '../src/ui/tui/SpecPickerView.js';
 import { ActivityLogView } from '../src/ui/tui/ActivityLogView.js';
 import { CategoryIssuesView } from '../src/ui/tui/CategoryIssuesView.js';
+import { ProvidersPickerView } from '../src/ui/tui/ProvidersPickerView.js';
 
 describe('TUI Components', () => {
   const dummyConfig: any = {
@@ -444,4 +445,131 @@ describe('TUI Components', () => {
     expect(output).toContain('Showing');
     expect(output).toContain('of 25 issues');
   });
+
+  it('should suggest /providers in CommandPalette when filtering by /prov', () => {
+    const { lastFrame } = render(
+      <MasterDashboard
+        config={dummyConfig}
+        dag={null}
+        quotaStatus={null}
+        workers={[]}
+        selectedIndex={0}
+        activityLogs={[]}
+        commandInput="/prov"
+        isCommandMode={true}
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('COMMAND PALETTE');
+    expect(output).toContain('/providers');
+    expect(output).toContain('Toggle allowed LLM providers/runners');
+  });
+
+  it('should render ProvidersPickerView with provider list, status badges, and details', () => {
+    const { lastFrame } = render(
+      <ProvidersPickerView
+        providers={[
+          {
+            id: 'claude',
+            name: 'claude',
+            displayName: 'Claude Code CLI (claude)',
+            binaryName: 'claude',
+            description: 'Anthropic Claude Code CLI agent runner',
+            isInstalled: true,
+            isAllowed: true,
+            isDefault: true,
+          },
+          {
+            id: 'agy',
+            name: 'agy',
+            displayName: 'Antigravity CLI (agy)',
+            binaryName: 'agy',
+            description: 'Google DeepMind Antigravity CLI agent runner',
+            isInstalled: true,
+            isAllowed: false,
+            isDefault: false,
+          },
+          {
+            id: 'pi',
+            name: 'pi',
+            displayName: 'Pi CLI (pi)',
+            binaryName: 'pi',
+            description: 'Inflection Pi CLI agent runner',
+            isInstalled: false,
+            isAllowed: false,
+            isDefault: false,
+          },
+        ]}
+        highlightedIndex={0}
+        repository="owner/test-repo"
+        configPath=".autopilot/config.json"
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('LLM PROVIDERS & RUNNERS MANAGER');
+    expect(output).toContain('Repo: owner/test-repo');
+    expect(output).toContain('Config: .autopilot/config.json');
+    expect(output).toContain('[x] Yes');
+    expect(output).toContain('Claude Code CLI (claude)');
+    expect(output).toContain('[default runner]');
+    expect(output).toContain('● installed');
+    expect(output).toContain('[ ] No');
+    expect(output).toContain('Antigravity CLI (agy)');
+    expect(output).toContain('○ not installed');
+    expect(output).toContain('1 allowed (claude)');
+    expect(output).toContain('[Space] Toggle Allowed');
+    expect(output).toContain('[d] Set Default');
+    expect(output).toContain('[a] Allow All Installed');
+    expect(output).toContain('[Enter] Save');
+    expect(output).toContain('[Esc] Back');
+  });
+
+  it('should render ProvidersPickerView with warning when all providers are disabled', () => {
+    const { lastFrame } = render(
+      <ProvidersPickerView
+        providers={[
+          {
+            id: 'claude',
+            name: 'claude',
+            displayName: 'Claude Code CLI (claude)',
+            binaryName: 'claude',
+            description: 'Anthropic Claude Code CLI agent runner',
+            isInstalled: true,
+            isAllowed: false,
+            isDefault: false,
+          },
+        ]}
+        highlightedIndex={0}
+        repository="owner/test-repo"
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('No providers are currently allowed for this repository');
+    expect(output).toContain('None (All disabled)');
+  });
+
+  it('should render allowed providers in MasterDashboard header when configured', () => {
+    const configWithAllowed = {
+      ...dummyConfig,
+      allowedProviders: ['claude', 'agy'],
+    };
+
+    const { lastFrame } = render(
+      <MasterDashboard
+        config={configWithAllowed}
+        dag={null}
+        quotaStatus={null}
+        workers={[]}
+        selectedIndex={0}
+        activityLogs={[]}
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('Allowed: claude, agy');
+  });
 });
+
