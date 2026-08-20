@@ -13,8 +13,9 @@ import { AgentEventBus } from '../events/bus.js';
 import { resolveTelegramCredentials } from '../config/credentials.js';
 import { TelegramRemoteProvider } from '../remote/telegram.js';
 import { RemoteControlManager } from '../remote/manager.js';
+import type { RemoteActionController } from '../remote/types.js';
 
-export class Orchestrator {
+export class Orchestrator implements RemoteActionController {
   private config: AutoPilotConfig;
   private gh: GitHubClient;
   private dag: IssueDAG;
@@ -69,6 +70,8 @@ export class Orchestrator {
             defaultChatId: creds.defaultChatId,
             notifications: this.config.remote.telegram.notifications,
             eventBus: this.eventBus,
+            actionController: this,
+            quotaMonitor: this.quotaMonitor,
           });
         }
       } catch (err: any) {
@@ -80,16 +83,16 @@ export class Orchestrator {
     this.isSessionStarted = true;
 
     // Setup quota event listeners
-    this.quotaMonitor.on('quota_paused', ({ resetAt, waitMs }) => {
+    this.quotaMonitor.on('quota_paused', ({ resetAt, waitMs, runnerName }) => {
       const waitMinutes = Math.ceil(waitMs / (60 * 1000));
       this.stateMgr.updateDaemonStatus('paused_quota', resetAt.toISOString());
-      Notifier.notifyQuotaPaused(resetAt, waitMinutes);
+      Notifier.notifyQuotaPaused(resetAt, waitMinutes, runnerName);
       this.dashboard.log(`5h Quota limit hit. Suspended workers until ${resetAt.toLocaleTimeString()}`);
     });
 
-    this.quotaMonitor.on('quota_resumed', () => {
+    this.quotaMonitor.on('quota_resumed', ({ runnerName }) => {
       this.stateMgr.updateDaemonStatus('running');
-      Notifier.notifyQuotaResumed();
+      Notifier.notifyQuotaResumed(runnerName);
       this.dashboard.log('Quota reset window reached. Resuming workers.');
     });
   }
@@ -897,5 +900,33 @@ ${autoMergeStep}
       }
       return { success: false, message: `Could not open Issue #${issueNumber}` };
     }
+  }
+
+  public resumeQuota(runner?: string): void {
+    this.quotaMonitor.resumeFromQuota(runner);
+    this.stateMgr.updateDaemonStatus('running');
+    const runnerStr = runner ? ` for runner ${runner}` : '';
+    this.dashboard.log(`Quota resumed by developer${runnerStr}. Resuming workers.`);
+  }
+
+  public async pauseTask(issueNumber: number): Promise<void> {
+    await this.pauseWorker(issueNumber);
+  }
+
+  public async resumeTask(issueNumber: number): Promise<void> {
+    await this.resumeWorker(issueNumber);
+  }
+
+  public async replyToNeedsInfo(issueNumber: number, answer: string): Promise<void> {
+    await this.injectPrompt(issueNumber, answer);
+  }
+
+  public getStatusSummary(): unknown {
+    return {
+      daemonStatus: this.stateMgr.getState().daemonStatus,
+      activeTasks: Array.from(this.activeTaskNumbers),
+      targetSpecs: this.dag.getTargetSpecs(),
+      quota: this.quotaMonitor.getStatus(),
+    };
   }
 }

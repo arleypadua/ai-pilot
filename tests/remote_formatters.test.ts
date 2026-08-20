@@ -8,6 +8,9 @@ import {
   formatNeedsInfo,
   formatQuotaPaused,
   formatQuotaResumed,
+  formatQuotaResumedByDeveloper,
+  buildQuotaResumeCallbackData,
+  parseQuotaActionPayload,
 } from '../src/remote/formatters.js';
 
 describe('Remote Message Formatters', () => {
@@ -129,6 +132,87 @@ describe('Remote Message Formatters', () => {
 
       expect(msg).toContain('[owner/repo] ▶️ *Quota Resumed*');
       expect(msg).toContain('Workers resumed for runner `claude`');
+    });
+  });
+
+  describe('formatQuotaResumedByDeveloper', () => {
+    it('appends developer resumption notice to original text with timestamp', () => {
+      const original = '[owner/repo] ⏳ *Quota Limit Reached*\n\n5h rolling quota reached.';
+      const timestamp = new Date('2026-08-20T19:45:00Z');
+      const msg = formatQuotaResumedByDeveloper('owner/repo', {
+        originalText: original,
+        timestamp,
+        runnerName: 'claude',
+      });
+
+      expect(msg).toContain(original);
+      expect(msg).toContain('▶️ Resumed by developer at');
+    });
+
+    it('formats developer resumption notice without original text', () => {
+      const timestamp = new Date('2026-08-20T19:45:00Z');
+      const msg = formatQuotaResumedByDeveloper('owner/repo', {
+        timestamp,
+      });
+
+      expect(msg).toContain('[owner/repo] ▶️ Resumed by developer at');
+    });
+
+    it('does not duplicate developer resumption notice if already present in original text', () => {
+      const original = '[owner/repo] ⏳ *Quota Limit Reached*\n\n▶️ Resumed by developer at 07:45 PM';
+      const msg = formatQuotaResumedByDeveloper('owner/repo', {
+        originalText: original,
+      });
+
+      expect(msg).toBe(original);
+    });
+  });
+
+  describe('buildQuotaResumeCallbackData', () => {
+    it('builds callback data with specific runner', () => {
+      expect(buildQuotaResumeCallbackData('claude')).toBe('v1:q:res:claude');
+      expect(buildQuotaResumeCallbackData('AGY')).toBe('v1:q:res:agy');
+    });
+
+    it('builds callback data without runner (all runners)', () => {
+      expect(buildQuotaResumeCallbackData()).toBe('v1:q:res:');
+      expect(buildQuotaResumeCallbackData('')).toBe('v1:q:res:');
+    });
+  });
+
+  describe('parseQuotaActionPayload', () => {
+    it('parses valid callback data for a specific runner', () => {
+      expect(parseQuotaActionPayload('v1:q:res:claude')).toEqual({
+        action: 'resume',
+        runner: 'claude',
+      });
+      expect(parseQuotaActionPayload('v1:q:res:agy')).toEqual({
+        action: 'resume',
+        runner: 'agy',
+      });
+    });
+
+    it('parses callback data for all runners / empty runner', () => {
+      expect(parseQuotaActionPayload('v1:q:res:')).toEqual({
+        action: 'resume',
+        runner: undefined,
+      });
+      expect(parseQuotaActionPayload('v1:q:res:all')).toEqual({
+        action: 'resume',
+        runner: undefined,
+      });
+      expect(parseQuotaActionPayload('v1:q:res')).toEqual({
+        action: 'resume',
+        runner: undefined,
+      });
+    });
+
+    it('returns null for invalid or non-quota callback payloads', () => {
+      expect(parseQuotaActionPayload('v1:inf:42:1')).toBeNull();
+      expect(parseQuotaActionPayload('v1:q:unknown:claude')).toBeNull();
+      expect(parseQuotaActionPayload('invalid_data')).toBeNull();
+      expect(parseQuotaActionPayload('')).toBeNull();
+      expect(parseQuotaActionPayload(null as any)).toBeNull();
     });
   });
 });

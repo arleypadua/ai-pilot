@@ -238,16 +238,16 @@ describe('TelegramRemoteProvider', () => {
   });
 
   describe('Action & Reply Handlers', () => {
-    it('dispatches callback query to matching onAction handler and answers callback query', async () => {
+    it('dispatches callback query to matching onAction handler, passes ActionContext, and answers callback query', async () => {
       provider = new TelegramRemoteProvider({
         bot,
         rateLimiter,
         allowedUserIds: [111],
       });
 
-      let handledAction: { action: string; payload: string; userId: number } | null = null;
-      provider.onAction('v1:inf', async (action, payload, userId) => {
-        handledAction = { action, payload, userId };
+      let handledAction: { action: string; payload: string; userId: number; context?: any } | null = null;
+      provider.onAction('v1:inf', async (action, payload, userId, context) => {
+        handledAction = { action, payload, userId, context };
       });
 
       await bot.handleUpdate({
@@ -261,6 +261,7 @@ describe('TelegramRemoteProvider', () => {
             message_id: 50,
             date: Math.floor(Date.now() / 1000),
             chat: { id: 111, type: 'private' },
+            text: 'Question: Which database?',
           },
         },
       });
@@ -269,6 +270,11 @@ describe('TelegramRemoteProvider', () => {
         action: 'v1:inf',
         payload: 'v1:inf:42:opt1',
         userId: 111,
+        context: {
+          messageId: 50,
+          chatId: 111,
+          originalText: 'Question: Which database?',
+        },
       });
       const answerCall = apiCalls.find((c) => c.method === 'answerCallbackQuery');
       expect(answerCall).toBeDefined();

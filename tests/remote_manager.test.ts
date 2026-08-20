@@ -1,15 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { RemoteControlManager } from '../src/remote/manager.js';
-import type { RemoteControlProvider, RemoteMessageOptions } from '../src/remote/types.js';
+import type {
+  RemoteControlProvider,
+  RemoteMessageOptions,
+  RemoteActionController,
+  ActionContext,
+} from '../src/remote/types.js';
 import { Notifier } from '../src/notifications/notifier.js';
 import { AgentEventBus } from '../src/events/bus.js';
+import { QuotaMonitor } from '../src/quota/monitor.js';
 
 class MockRemoteProvider implements RemoteControlProvider {
   public readonly name = 'mock';
   public isStarted = false;
   public sentMessages: Array<{ text: string; options?: RemoteMessageOptions }> = [];
   public editedMessages: Array<{ messageId: number; text: string; options?: RemoteMessageOptions }> = [];
-  private actionHandlers: Map<string, (action: string, payload: string, userId: number) => Promise<void>> = new Map();
+  public actionHandlers: Map<
+    string,
+    (action: string, payload: string, userId: number, context?: ActionContext) => Promise<void>
+  > = new Map();
 
   public async start(): Promise<void> {
     this.isStarted = true;
@@ -37,20 +46,66 @@ class MockRemoteProvider implements RemoteControlProvider {
 
   public onAction(
     actionPrefix: string,
-    handler: (action: string, payload: string, userId: number) => Promise<void>
+    handler: (action: string, payload: string, userId: number, context?: ActionContext) => Promise<void>
   ): void {
     this.actionHandlers.set(actionPrefix, handler);
+  }
+
+  public async triggerAction(
+    payload: string,
+    userId: number = 123,
+    context?: ActionContext
+  ): Promise<void> {
+    for (const [prefix, handler] of this.actionHandlers.entries()) {
+      if (payload.startsWith(prefix)) {
+        await handler(prefix, payload, userId, context);
+      }
+    }
+  }
+}
+
+class MockActionController implements RemoteActionController {
+  public resumedRunners: Array<string | undefined> = [];
+  public pausedTasks: number[] = [];
+  public resumedTasks: number[] = [];
+  public replies: Array<{ issueNumber: number; answer: string }> = [];
+  public targetSpecs: number[][] = [];
+
+  public resumeQuota(runner?: string): void {
+    this.resumedRunners.push(runner);
+  }
+
+  public async pauseTask(issueNumber: number): Promise<void> {
+    this.pausedTasks.push(issueNumber);
+  }
+
+  public async resumeTask(issueNumber: number): Promise<void> {
+    this.resumedTasks.push(issueNumber);
+  }
+
+  public async replyToNeedsInfo(issueNumber: number, answer: string): Promise<void> {
+    this.replies.push({ issueNumber, answer });
+  }
+
+  public setTargetSpecs(specs: number[]): void {
+    this.targetSpecs.push(specs);
+  }
+
+  public getStatusSummary(): unknown {
+    return { mock: true };
   }
 }
 
 describe('RemoteControlManager', () => {
   let provider: MockRemoteProvider;
+  let actionController: MockActionController;
   let manager: RemoteControlManager;
   let eventBus: AgentEventBus;
 
   beforeEach(() => {
     Notifier.removeAllListeners();
     provider = new MockRemoteProvider();
+    actionController = new MockActionController();
     eventBus = AgentEventBus.getInstance();
     eventBus.clearHistory();
   });
@@ -68,6 +123,7 @@ describe('RemoteControlManager', () => {
       repository: 'arleypadua/imagos',
       defaultChatId: 123456,
       eventBus,
+      actionController,
     });
 
     await manager.start();
@@ -119,19 +175,141 @@ describe('RemoteControlManager', () => {
     expect(provider.sentMessages[3].text).toContain('[arleypadua/imagos] ❓ *Feedback Needed*: #24');
     expect(provider.sentMessages[3].text).toContain('Should we enable auto-retry by default?');
 
-    // 5. Quota Paused
+    // 5. Quota Paused (includes inline [⚡ Resume Immediately] action button)
     const resetTime = new Date('2026-08-20T19:00:00Z');
     Notifier.notifyQuotaPaused(resetTime, 45, 'claude');
 
     expect(provider.sentMessages.length).toBe(5);
     expect(provider.sentMessages[4].text).toContain('[arleypadua/imagos] ⏳ *Quota Limit Reached*');
     expect(provider.sentMessages[4].text).toContain('• *Runner*: `claude`');
+    expect(provider.sentMessages[4].options?.actions).toBeDefined();
+    expect(provider.sentMessages[4].options?.actions?.[0][0].label).toBe('⚡ Resume Immediately');
+    expect(provider.sentMessages[4].options?.actions?.[0][0].payload).toBe('v1:q:res:claude');
 
     // 6. Quota Resumed
     Notifier.notifyQuotaResumed('claude');
 
     expect(provider.sentMessages.length).toBe(6);
     expect(provider.sentMessages[5].text).toContain('[arleypadua/imagos] ▶️ *Quota Resumed*');
+  });
+
+  it('listens to quota_paused and quota_resumed events from QuotaMonitor instance', async () => {
+    const quotaMonitor = new QuotaMonitor();
+
+    manager = new RemoteControlManager({
+      provider,
+      repository: 'arleypadua/imagos',
+      defaultChatId: 123456,
+      quotaMonitor,
+      actionController,
+    });
+
+    await manager.start();
+
+    const resetAt = new Date(Date.now() + 30 * 60 * 1000);
+    quotaMonitor.triggerQuotaPause(resetAt, '5h session limit reached', 'agy');
+
+    expect(provider.sentMessages.length).toBe(1);
+    expect(provider.sentMessages[0].text).toContain('[arleypadua/imagos] ⏳ *Quota Limit Reached*');
+    expect(provider.sentMessages[0].text).toContain('• *Runner*: `agy`');
+    expect(provider.sentMessages[0].options?.actions?.[0][0].payload).toBe('v1:q:res:agy');
+
+    quotaMonitor.resumeFromQuota('agy');
+
+    expect(provider.sentMessages.length).toBe(2);
+    expect(provider.sentMessages[1].text).toContain('[arleypadua/imagos] ▶️ *Quota Resumed*');
+  });
+
+  it('invokes RemoteActionController.resumeQuota and edits message inline when resume button is clicked', async () => {
+    manager = new RemoteControlManager({
+      provider,
+      repository: 'arleypadua/imagos',
+      defaultChatId: 123456,
+      actionController,
+    });
+
+    await manager.start();
+
+    const resetTime = new Date('2026-08-20T20:00:00Z');
+    await manager.sendQuotaPaused({
+      resetAt: resetTime,
+      waitMinutes: 45,
+      runnerName: 'claude',
+    });
+
+    expect(provider.sentMessages.length).toBe(1);
+    const originalText = provider.sentMessages[0].text;
+
+    // Simulate clicking the inline [⚡ Resume Immediately] button
+    await provider.triggerAction('v1:q:res:claude', 111, {
+      messageId: 1,
+      chatId: 123456,
+      originalText,
+    });
+
+    // 1. RemoteActionController was called with runner 'claude'
+    expect(actionController.resumedRunners).toEqual(['claude']);
+
+    // 2. Message was edited inline to remove buttons and display resume notice
+    expect(provider.editedMessages.length).toBe(1);
+    expect(provider.editedMessages[0].messageId).toBe(1);
+    expect(provider.editedMessages[0].text).toContain(originalText);
+    expect(provider.editedMessages[0].text).toContain('▶️ Resumed by developer at');
+    expect(provider.editedMessages[0].options?.actions).toEqual([]);
+  });
+
+  it('handles quota resumption for all runners when runner is empty or all', async () => {
+    manager = new RemoteControlManager({
+      provider,
+      repository: 'arleypadua/imagos',
+      defaultChatId: 123456,
+      actionController,
+    });
+
+    await manager.start();
+
+    await provider.triggerAction('v1:q:res:', 111, {
+      messageId: 2,
+      chatId: 123456,
+      originalText: 'Quota reached',
+    });
+
+    expect(actionController.resumedRunners).toEqual([undefined]);
+    expect(provider.editedMessages.length).toBe(1);
+  });
+
+  it('enforces idempotency preventing double clicks on resume button', async () => {
+    manager = new RemoteControlManager({
+      provider,
+      repository: 'arleypadua/imagos',
+      defaultChatId: 123456,
+      actionController,
+    });
+
+    await manager.start();
+
+    const originalText = '[arleypadua/imagos] ⏳ *Quota Limit Reached*';
+
+    // First click
+    await provider.triggerAction('v1:q:res:claude', 111, {
+      messageId: 10,
+      chatId: 123456,
+      originalText,
+    });
+
+    expect(actionController.resumedRunners).toEqual(['claude']);
+    expect(provider.editedMessages.length).toBe(1);
+
+    // Second click on the same message (e.g. rapid double tap or duplicate callback)
+    await provider.triggerAction('v1:q:res:claude', 111, {
+      messageId: 10,
+      chatId: 123456,
+      originalText,
+    });
+
+    // Still only 1 call to resumeQuota and 1 editMessage call
+    expect(actionController.resumedRunners).toEqual(['claude']);
+    expect(provider.editedMessages.length).toBe(1);
   });
 
   it('respects notification toggles to disable specific notifications', async () => {
