@@ -250,7 +250,7 @@ export class Orchestrator {
     for (const node of tasksToDispatch) {
       this.activeTaskNumbers.add(node.issue.number);
       // Run asynchronously in background
-      this.executeTask(node).finally(() => {
+      this.executeTask(node, undefined, 0).finally(() => {
         this.activeTaskNumbers.delete(node.issue.number);
         this.dashboard.removeWorker(node.issue.number);
       });
@@ -277,7 +277,7 @@ export class Orchestrator {
     const node = this.dag.getNode(issueNumber);
     if (node) {
       this.activeTaskNumbers.add(issueNumber);
-      this.executeTask(node, prompt).finally(() => {
+      this.executeTask(node, prompt, 0).finally(() => {
         this.activeTaskNumbers.delete(issueNumber);
         this.dashboard.removeWorker(issueNumber);
       });
@@ -293,7 +293,11 @@ export class Orchestrator {
     };
   }
 
-  private async executeTask(node: DAGNode, overrideFeedback?: string): Promise<void> {
+  private async executeTask(
+    node: DAGNode,
+    overrideFeedback?: string,
+    autoNudgeCount: number = 0
+  ): Promise<void> {
     const { issue } = node;
     const isContinuation = await this.worktreeMgr.worktreeExists(issue.number);
     const runnerName = this.runnerFacade.resolveRunnerName(issue, this.config.runner);
@@ -338,6 +342,12 @@ export class Orchestrator {
 
       try {
         await this.gh.addComment(issue.number, startComment);
+        if (isContinuation) {
+          await this.gh.editIssueLabels(issue.number, {
+            add: [this.config.labels.readyForAgent],
+            remove: [this.config.labels.readyForHuman, this.config.labels.needsInfo],
+          });
+        }
       } catch {
         // Comment failure is non-fatal
       }
@@ -395,6 +405,8 @@ export class Orchestrator {
           userFeedback,
           extraPrompt: this.config.extraPrompt,
           runnerName,
+          autoMerge: this.config.autoMerge,
+          mergeMethod: this.config.mergeMethod,
         },
         {
           cwd: worktreePath,
@@ -417,7 +429,7 @@ export class Orchestrator {
         const nextPrompt = runnerRes.injectedPrompt || userFeedback;
         this.dashboard.log(`Issue #${issue.number} interrupted by developer prompt. Re-executing session with feedback...`);
         this.stateMgr.recordTaskStage(issue.number, 'PROMPT_RESUMED', 'running', `Resuming with prompt: ${nextPrompt?.slice(0, 80)}`);
-        return this.executeTask(node, nextPrompt);
+        return this.executeTask(node, nextPrompt, 0);
       }
 
       // Check if runner paused due to quota
@@ -486,27 +498,83 @@ export class Orchestrator {
           }
         }
 
-        // Transition issue to ready-for-human so it does not loop in ready DAG queue
+        // If a PR is open (and either autoMerge is false or autoMerge failed), transition to human review
+        if (pr) {
+          try {
+            await this.gh.editIssueLabels(issue.number, {
+              add: [this.config.labels.readyForHuman],
+              remove: [this.config.labels.readyForAgent],
+            });
+            const prMsg = `\n\n- **Pull Request**: [#${pr.number}](${pr.url})`;
+            await this.gh.addComment(
+              issue.number,
+              `👀 **Ready for Human Review**\n\nPull Request [#${pr.number}](${pr.url}) is open for review.${prMsg}\n\n*Marked \`${this.config.labels.readyForHuman}\` for developer review and merge.*`
+            );
+          } catch {
+            // Best effort
+          }
+
+          this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback', {
+            prUrl: pr.url,
+            prNumber: pr.number,
+          });
+          this.dashboard.log(`Issue #${issue.number} marked ready-for-human (PR #${pr.number}).`);
+          Notifier.notifyNeedsFeedback(issue.number, issue.title, `PR #${pr.number} ready for review`);
+          return;
+        }
+
+        // If NO PR was opened and NO feedback label was requested:
+        const maxNudges = this.config.maxAutoNudges ?? 2;
+        if (autoNudgeCount < maxNudges) {
+          this.dashboard.log(
+            `Issue #${issue.number}: Agent finished turn without opening PR or closing issue. Auto-nudging agent to verify and create PR (attempt ${autoNudgeCount + 1}/${maxNudges})...`
+          );
+
+          const mergeMethod = this.config.mergeMethod || 'squash';
+          const autoMergeStep = this.config.autoMerge
+            ? `4. Since autoMerge is enabled, once tests/CI pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
+            : `4. Keep the Pull Request open for human review (do not auto-merge).`;
+
+          const nudgePrompt = `You completed your previous execution turn without opening a Pull Request or closing the issue.
+
+Please check if your implementation, tests, and code review (/code-review) were already completed before the session stopped:
+- **If tests and review (/code-review) are already complete or verified:** Do NOT re-run all test suites or re-execute reviews from scratch (avoid burning unnecessary tokens). Immediately proceed to commit any remaining uncommitted changes, push your branch, and create/merge the PR.
+- **If tests or review were in progress or pending:** Verify only the pending checks or recent test output to ensure everything is green.
+
+Finalization steps:
+1. Ensure all changes are committed: \`git add -A && git commit -m "..."\`
+2. Push your branch to remote: \`git push -u origin ${branchName}\`
+3. Open a Pull Request if not already opened: \`gh pr create --title "${issue.title.replace(/"/g, '\\"')}" --body "Closes #${issue.number}"\`
+${autoMergeStep}
+5. If you are blocked or intentionally require human intervention, explain why in an issue comment (\`gh issue comment ${issue.number} --body "..."\`) and label the issue \`ready-for-human\`.`;
+
+          this.stateMgr.recordTaskStage(
+            issue.number,
+            'AUTO_NUDGE',
+            'running',
+            `Auto-nudging agent to finalize PR (attempt ${autoNudgeCount + 1}/${maxNudges})`
+          );
+
+          return this.executeTask(node, nudgePrompt, autoNudgeCount + 1);
+        }
+
+        // Exhausted auto-nudges without PR or feedback request
         try {
           await this.gh.editIssueLabels(issue.number, {
             add: [this.config.labels.readyForHuman],
             remove: [this.config.labels.readyForAgent],
           });
-          const prMsg = pr ? `\n\n- **Pull Request**: [#${pr.number}](${pr.url})` : '';
           await this.gh.addComment(
             issue.number,
-            `👀 **Ready for Human Review**\n\nAgent completed execution without closing/merging.${prMsg}\n\n*Marked \`${this.config.labels.readyForHuman}\` for developer review and merge.*`
+            `⚠️ **Agent Stalled Without PR**\n\nThe agent completed execution without creating a Pull Request or closing the issue after ${maxNudges} follow-up nudges.\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
           );
         } catch {
           // Best effort
         }
 
-        this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback', {
-          prUrl: pr?.url,
-          prNumber: pr?.number,
-        });
-        this.dashboard.log(`Issue #${issue.number} marked ready-for-human (${pr ? `PR #${pr.number}` : 'unmerged'}).`);
-        Notifier.notifyNeedsFeedback(issue.number, issue.title, pr ? `PR #${pr.number} ready for review` : 'Agent finished execution');
+        this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
+        this.dashboard.log(`Issue #${issue.number} marked ready-for-human (no PR opened after ${maxNudges} nudges).`);
+        Notifier.notifyNeedsFeedback(issue.number, issue.title, 'Agent finished execution without opening a PR');
         return;
       } else {
         this.stateMgr.finishTaskSession(issue.number, 'failed', { error: runnerRes.error });

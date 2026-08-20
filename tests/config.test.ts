@@ -23,6 +23,7 @@ describe('AutoPilotConfigSchema', () => {
 
       expect(config.baseBranch).toBe('main');
       expect(config.maxConcurrency).toBe(2);
+      expect(config.maxAutoNudges).toBe(2);
       expect(config.pollIntervalSeconds).toBe(30);
       expect(config.runner).toBe('claude');
       expect(config.autoMerge).toBe(true);

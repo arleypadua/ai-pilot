@@ -85,6 +85,8 @@ export interface TaskContext {
   userFeedback?: string;
   extraPrompt?: string;
   runnerName?: string;
+  autoMerge?: boolean;
+  mergeMethod?: 'squash' | 'merge' | 'rebase';
 }
 
 export interface RunnerResult {
@@ -117,6 +119,7 @@ export interface AutoPilotConfig {
   targetSpecs?: number[];
   baseBranch: string;
   maxConcurrency: number;
+  maxAutoNudges?: number;
   pollIntervalSeconds: number;
   extraPrompt?: string;
   runner: string;

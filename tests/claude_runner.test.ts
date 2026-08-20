@@ -86,4 +86,37 @@ describe('ClaudeRunner', () => {
     expect(prompt).toContain('### Repository Instructions');
     expect(prompt).toContain('Always copy server/.env to worktree before running server tests.');
   });
+
+  it('should format merge instructions according to autoMerge and mergeMethod', () => {
+    const runner = new ClaudeRunner();
+    const contextWithAutoMerge: TaskContext = {
+      issue: {
+        number: 42,
+        title: 'Add REST endpoint',
+        body: 'Create endpoint.',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/42',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      kind: 'standalone',
+      worktreePath: '/tmp/worktree',
+      branchName: 'agent/issue-42',
+      baseBranch: 'main',
+      autoMerge: true,
+      mergeMethod: 'rebase',
+    };
+
+    const promptAuto = runner.buildPrompt(contextWithAutoMerge);
+    expect(promptAuto).toContain('gh pr merge --rebase --delete-branch');
+
+    const contextNoAutoMerge: TaskContext = {
+      ...contextWithAutoMerge,
+      autoMerge: false,
+    };
+    const promptNoAuto = runner.buildPrompt(contextNoAutoMerge);
+    expect(promptNoAuto).toContain('leave the Pull Request open for developer review and merge (do not auto-merge)');
+    expect(promptNoAuto).not.toContain('gh pr merge --rebase');
+  });
 });

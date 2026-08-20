@@ -116,6 +116,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
 
   const buildSpecOptions = (): SpecOption[] => {
     const options: SpecOption[] = [];
+    const workersMap = new Map(workers.map((w) => [w.issueNumber, w]));
     if (dag) {
       const specNodes = dag.getAllNodes().filter((n) => n.kind === 'spec' && n.issue.state === 'OPEN');
       for (const specNode of specNodes) {
@@ -125,6 +126,11 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
           title: specNode.issue.title,
           childCount: comp.totalTickets,
           completedCount: comp.completedTickets,
+          worker: workersMap.get(specNode.issue.number),
+          blockers: specNode.blockers,
+          labels: specNode.issue.labels?.map((l) => l.name),
+          status: specNode.status,
+          issue: specNode.issue,
         });
       }
     }
@@ -467,11 +473,18 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
           setStatusMessage(undefined);
           setCommandResult(null);
         } else if (selectedIndex === workers.length) {
-          setSelectedCategory('specs');
-          setCategoryItemIndex(0);
+          setHighlightedSpecIndex(0);
+          const currentSpecs = dag ? dag.getTargetSpecs() : [];
+          if (currentSpecs.length > 0) {
+            setSelectedSpecNumbers(new Set(currentSpecs));
+            setIsAllTasksSelected(false);
+          } else {
+            setSelectedSpecNumbers(new Set());
+            setIsAllTasksSelected(true);
+          }
           setConfirmAction(null);
           setCategoryStatusMessage(undefined);
-          setView('category_issues');
+          setView('spec_picker');
         } else if (selectedIndex === workers.length + 1) {
           setSelectedCategory('ready');
           setCategoryItemIndex(0);
@@ -674,8 +687,33 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
         return;
       }
     } else if (view === 'spec_picker') {
+      const currentOpt = specOptions[highlightedSpecIndex];
+
+      if (confirmAction && confirmAction.type === 'kill') {
+        if (input === 'y' || input === 'Y') {
+          const issueNum = confirmAction.issueNumber;
+          setConfirmAction(null);
+          setCategoryStatusMessage(`⏳ Killing worker and wiping worktree for #${issueNum}...`);
+          orchestrator.killAndWipeWorker(issueNum).then((res) => {
+            setCategoryStatusMessage(`✓ ${res.message}`);
+            setTimeout(() => setCategoryStatusMessage(undefined), 5000);
+          });
+          return;
+        }
+
+        if (input === 'n' || input === 'N' || key.escape) {
+          setConfirmAction(null);
+          setCategoryStatusMessage('Kill action cancelled.');
+          setTimeout(() => setCategoryStatusMessage(undefined), 2000);
+          return;
+        }
+        return;
+      }
+
       if (key.escape) {
         setView('dashboard');
+        setCategoryStatusMessage(undefined);
+        setConfirmAction(null);
         return;
       }
 
@@ -720,6 +758,54 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
           if (next) setSelectedSpecNumbers(new Set());
           return next;
         });
+        return;
+      }
+
+      if (input === 'o') {
+        if (currentOpt && currentOpt.number !== undefined) {
+          orchestrator.openIssueInBrowser(currentOpt.number).then((res) => {
+            setCategoryStatusMessage(res.message);
+            setTimeout(() => setCategoryStatusMessage(undefined), 4000);
+          });
+        }
+        return;
+      }
+
+      if (input === 'p') {
+        if (currentOpt && currentOpt.worker) {
+          if (currentOpt.worker.status === 'paused_quota') {
+            orchestrator.resumeWorker(currentOpt.worker.issueNumber).then((res) => {
+              setCategoryStatusMessage(`✓ ${res.message}`);
+              setTimeout(() => setCategoryStatusMessage(undefined), 4000);
+            });
+          } else {
+            orchestrator.pauseWorker(currentOpt.worker.issueNumber).then((res) => {
+              setCategoryStatusMessage(`⏸️ ${res.message}`);
+              setTimeout(() => setCategoryStatusMessage(undefined), 4000);
+            });
+          }
+        } else if (currentOpt && currentOpt.number !== undefined) {
+          setCategoryStatusMessage(`ℹ️ Spec #${currentOpt.number} has no active worker to pause/resume.`);
+          setTimeout(() => setCategoryStatusMessage(undefined), 3000);
+        }
+        return;
+      }
+
+      if (input === 'x' || (input === 'k' && !key.upArrow && currentOpt?.worker)) {
+        if (currentOpt && currentOpt.number !== undefined) {
+          setConfirmAction({ type: 'kill', issueNumber: currentOpt.number });
+        }
+        return;
+      }
+
+      if (input === 'i') {
+        if (currentOpt && currentOpt.number !== undefined) {
+          setInspectIssueNumber(currentOpt.number);
+          loadHistoricalEvents(currentOpt.number);
+          setView('inspect');
+          setInputText('');
+          setStatusMessage(undefined);
+        }
         return;
       }
 
@@ -790,6 +876,8 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
         highlightedIndex={highlightedSpecIndex}
         selectedNumbers={selectedSpecNumbers}
         isAllTasksSelected={isAllTasksSelected}
+        confirmAction={confirmAction}
+        statusMessage={categoryStatusMessage}
         repository={config.repository}
       />
     );

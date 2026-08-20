@@ -40,12 +40,24 @@ export class AgyRunner implements AgentRunner {
   }
 
   public buildPrompt(context: TaskContext): string {
-    const { issue, isContinuation, userFeedback, extraPrompt, baseBranch = 'main' } = context;
+    const {
+      issue,
+      isContinuation,
+      userFeedback,
+      extraPrompt,
+      baseBranch = 'main',
+      autoMerge = true,
+      mergeMethod = 'squash',
+    } = context;
     const issueRef = issue.url || `#${issue.number}`;
 
     const extraSection = extraPrompt
       ? `\n### Repository Instructions\n${extraPrompt.trim()}\n`
       : '';
+
+    const mergeGuideline = autoMerge
+      ? `- Once all tests, review, and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
+      : `- Once all tests and CI checks pass, leave the Pull Request open for developer review and merge (do not auto-merge).`;
 
     const guidelines = `### Guidelines & Protocol
 1. **Feedback, Questions & Human Review**: If you encounter blocking ambiguities, require clarification, or decide that manual human review is required before merging:
@@ -54,10 +66,11 @@ export class AgyRunner implements AgentRunner {
    - **Immediately conclude execution and exit.** Do not guess or leave the ticket in an untagged open state.
 2. **Follow-up Subtasks**: If you identify distinct out-of-scope work or follow-up subtasks:
    - Create child tickets: \`gh issue create --title "<title>" --body "Parent: #${issue.number}\\nBlocked by: #${issue.number}\\n\\n<details>" --label "ready-for-agent"\`
-3. **PR, Rebase & Merge**:
+3. **Review, PR, Rebase & Merge**:
+   - Verify changes with tests and code review. If review and tests were already completed in a prior turn, do not repeat them redundantly.
    - Push your branch and open a Pull Request: \`gh pr create --title "<title>" --body "Closes #${issue.number}\\n\\n<summary>"\`
    - Rebase onto \`${baseBranch}\` and resolve any conflicts if necessary.
-   - Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --squash --delete-branch\`) to close the issue.`;
+   ${mergeGuideline}`;
 
     if (isContinuation && userFeedback) {
       return `Implement the requested task for ${issueRef}.

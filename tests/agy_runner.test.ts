@@ -84,4 +84,37 @@ describe('AgyRunner', () => {
     expect(prompt).toContain('### Repository Instructions');
     expect(prompt).toContain('Run pnpm db:migrate before testing.');
   });
+
+  it('should format merge instructions according to autoMerge and mergeMethod', () => {
+    const runner = new AgyRunner();
+    const contextWithAutoMerge: TaskContext = {
+      issue: {
+        number: 101,
+        title: 'Add support for SQLite cache backend',
+        body: 'Implement SQLite cache driver.',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/101',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      kind: 'ticket',
+      worktreePath: '/tmp/worktree-101',
+      branchName: 'agent/issue-101-cache',
+      baseBranch: 'main',
+      autoMerge: true,
+      mergeMethod: 'merge',
+    };
+
+    const promptAuto = runner.buildPrompt(contextWithAutoMerge);
+    expect(promptAuto).toContain('gh pr merge --merge --delete-branch');
+
+    const contextNoAutoMerge: TaskContext = {
+      ...contextWithAutoMerge,
+      autoMerge: false,
+    };
+    const promptNoAuto = runner.buildPrompt(contextNoAutoMerge);
+    expect(promptNoAuto).toContain('leave the Pull Request open for developer review and merge (do not auto-merge)');
+    expect(promptNoAuto).not.toContain('gh pr merge --merge');
+  });
 });

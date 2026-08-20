@@ -237,15 +237,54 @@ describe('TUI Components', () => {
     );
 
     const output = lastFrame();
-    expect(output).toContain('SELECT TARGET SPECIFICATION SCOPE');
+    expect(output).toContain('SPECIFICATIONS & SCOPE SELECTOR');
     expect(output).toContain('[x]');
     expect(output).toContain('#205');
     expect(output).toContain('Fix authorization token ver');
-    expect(output).toContain('(1/4 sub-tasks complete)');
+    expect(output).toContain('1/4 completed');
     expect(output).toContain('#187');
     expect(output).toContain('2 specs selected (#205, #187)');
-    expect(output).toContain('[Space] Toggle');
-    expect(output).toContain('[Enter] Start Session');
+    expect(output).toContain('[Space] Toggle Scope');
+    expect(output).toContain('[Enter] Apply Scope');
+  });
+
+  it('should render SpecPickerView with active worker, blockers, and details box', () => {
+    const { lastFrame } = render(
+      <SpecPickerView
+        options={[
+          {
+            number: 186,
+            title: 'Spec: Hostname routing and separate domain',
+            childCount: 7,
+            completedCount: 2,
+            worker: {
+              issueNumber: 186,
+              title: 'Spec: Hostname routing and separate domain',
+              branchName: 'agent/issue-186-routing',
+              status: 'running',
+            },
+            blockers: [185],
+            labels: ['ready-for-agent'],
+            status: 'ready',
+          },
+        ]}
+        highlightedIndex={0}
+        selectedNumbers={new Set([186])}
+        isAllTasksSelected={false}
+        repository="wawesomeio/wawesome-monorepo"
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('SPECIFICATIONS & SCOPE SELECTOR');
+    expect(output).toContain('#186');
+    expect(output).toContain('2/7 completed');
+    expect(output).toContain('active worker');
+    expect(output).toContain('Blockers: #185');
+    expect(output).toContain('Active Worktree: agent/issue-186-routing (running)');
+    expect(output).toContain('[o] Open Browser');
+    expect(output).toContain('[p] Pause/Resume');
+    expect(output).toContain('[x/k] Kill & Wipe');
   });
 
   it('should render ActivityLogView window with full system logs and scroll footer', () => {
@@ -350,5 +389,39 @@ describe('TUI Components', () => {
     const output = lastFrame();
     expect(output).toContain('CONFIRM KILL & WIPE WORKTREE: Issue #206');
     expect(output).toContain('Press [y] to confirm and wipe, or [n] / [Esc] to cancel');
+  });
+
+  it('should scroll and window CategoryIssuesView when list is large and selectedIndex moves down', () => {
+    const issuesList = Array.from({ length: 25 }, (_, i) => ({
+      issue: {
+        number: 100 + i,
+        title: `Issue number ${100 + i} title`,
+        state: 'OPEN' as const,
+        labels: [{ name: 'ready-for-agent' }],
+        created_at: '2026-08-19T10:00:00Z',
+        updated_at: '2026-08-19T10:00:00Z',
+        comments: 0,
+      },
+      status: 'ready' as const,
+    }));
+
+    // Render with selectedIndex = 18 (near the bottom)
+    const { lastFrame } = render(
+      <CategoryIssuesView
+        categoryTitle="Ready for Agent"
+        issues={issuesList}
+        selectedIndex={18}
+        repository="owner/test-repo"
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('ISSUES: READY FOR AGENT');
+    expect(output).toContain('Total: 25');
+    // Issue #118 should be visible and selected
+    expect(output).toContain('❯ #118');
+    // Scroll indicator should show range
+    expect(output).toContain('Showing');
+    expect(output).toContain('of 25 issues');
   });
 });

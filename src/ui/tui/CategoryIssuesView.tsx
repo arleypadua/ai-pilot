@@ -56,6 +56,20 @@ export const CategoryIssuesView: React.FC<CategoryIssuesViewProps> = ({
     }
   };
 
+  const PAGE_SIZE = 10;
+  let startIndex = 0;
+  if (issues.length > PAGE_SIZE) {
+    if (selectedIndex < Math.floor(PAGE_SIZE / 2)) {
+      startIndex = 0;
+    } else if (selectedIndex >= issues.length - Math.floor(PAGE_SIZE / 2)) {
+      startIndex = Math.max(0, issues.length - PAGE_SIZE);
+    } else {
+      startIndex = selectedIndex - Math.floor(PAGE_SIZE / 2);
+    }
+  }
+  const endIndex = Math.min(issues.length, startIndex + PAGE_SIZE);
+  const visibleIssues = issues.slice(startIndex, endIndex);
+
   return (
     <Box flexDirection="column" paddingX={1} paddingY={0}>
       {/* Header Banner */}
@@ -122,8 +136,9 @@ export const CategoryIssuesView: React.FC<CategoryIssuesViewProps> = ({
               </Box>
             </Box>
 
-            {issues.slice(0, 10).map((item, index) => {
-              const isSelected = index === selectedIndex;
+            {visibleIssues.map((item, localIndex) => {
+              const actualIndex = startIndex + localIndex;
+              const isSelected = actualIndex === selectedIndex;
               const prefix = isSelected ? '❯ ' : '  ';
               const issueStr = `${prefix}#${item.issue.number}`;
               const titleStr = item.issue.title.length > 34 ? `${item.issue.title.slice(0, 31)}...` : item.issue.title;
@@ -152,6 +167,14 @@ export const CategoryIssuesView: React.FC<CategoryIssuesViewProps> = ({
                 </Box>
               );
             })}
+
+            {issues.length > PAGE_SIZE && (
+              <Box marginTop={1} flexDirection="row">
+                <Text color="gray">
+                  Showing {startIndex + 1}–{endIndex} of {issues.length} issues (use [↑/↓] or [j/k] to scroll)
+                </Text>
+              </Box>
+            )}
           </Box>
         )}
       </Box>
