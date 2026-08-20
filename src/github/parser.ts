@@ -22,8 +22,25 @@ export function parseIssueDependencies(issue: GitHubIssue): ParsedDependencies {
   const body = issue.body || '';
   const content = `${issue.title}\n${body}`;
   const blockers: Set<number> = new Set();
-  let parentNumber: number | undefined = undefined;
+  let parentNumber: number | undefined = issue.parent?.number;
   const subTaskNumbers: Set<number> = new Set();
+
+  // 0. NATIVE GITHUB ISSUE RELATIONSHIPS
+  if (issue.blockedBy) {
+    for (const b of issue.blockedBy) {
+      if (b.number !== issue.number) {
+        blockers.add(b.number);
+      }
+    }
+  }
+
+  if (issue.subIssues) {
+    for (const s of issue.subIssues) {
+      if (s.number !== issue.number) {
+        subTaskNumbers.add(s.number);
+      }
+    }
+  }
 
   // 1. SECTION-BASED PARSER
   // Split markdown by headers (## or ###)
@@ -37,7 +54,7 @@ export function parseIssueDependencies(issue: GitHubIssue): ParsedDependencies {
 
     // Check if this section is a Blocker section
     const isBlockerSection =
-      /(?:^#{1,4}\s+)?(?:blocked\s+by|blockers?|dependencies|depends\s+on|prerequisites?)/i.test(firstLine);
+      /^#{1,4}\s+(?:blocked\s+by|blockers?|dependencies|depends\s+on|prerequisites?)/i.test(firstLine);
 
     if (isBlockerSection) {
       const sectionIds = extractIssueIdsFromText(trimmed);
@@ -49,7 +66,7 @@ export function parseIssueDependencies(issue: GitHubIssue): ParsedDependencies {
     }
 
     // Check if this section is a Parent section (e.g. "## Parent\n\n#17 — ...")
-    const isParentSection = /(?:^#{1,4}\s+)?(?:parent(?:\s+issue)?|spec)/i.test(firstLine);
+    const isParentSection = /^#{1,4}\s+(?:parent(?:\s+issue)?|spec)/i.test(firstLine);
     if (isParentSection && parentNumber === undefined) {
       const sectionIds = extractIssueIdsFromText(trimmed);
       if (sectionIds.length > 0 && sectionIds[0] !== issue.number) {

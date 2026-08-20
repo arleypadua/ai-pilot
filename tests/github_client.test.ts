@@ -39,16 +39,69 @@ describe('GitHubClient', () => {
   });
 
   describe('fetchIssues', () => {
-    it('should fetch and parse issues with repo flag', async () => {
-      const mockIssues = [
-        { number: 1, title: 'Issue 1', body: 'Body 1', state: 'OPEN', labels: [], url: 'https://...', createdAt: '', updatedAt: '' },
-      ];
-      mockedExeca.mockResolvedValueOnce({ stdout: JSON.stringify(mockIssues) } as any);
+    it('should fetch and parse issues with native relationships via GraphQL', async () => {
+      const mockGraphQLResponse = {
+        data: {
+          repository: {
+            issues: {
+              nodes: [
+                {
+                  number: 187,
+                  title: 'Spec: Vite/React SSR',
+                  body: 'Spec body',
+                  state: 'OPEN',
+                  url: 'https://github.com/owner/repo/issues/187',
+                  createdAt: '2026-08-18T08:30:51Z',
+                  updatedAt: '2026-08-18T14:02:22Z',
+                  labels: {
+                    nodes: [{ name: 'ready-for-agent', color: '0E8A16', description: 'Ready' }],
+                  },
+                  parent: null,
+                  blockedBy: {
+                    nodes: [{ number: 186, title: 'Hostname routing', state: 'OPEN' }],
+                  },
+                  blocking: { nodes: [] },
+                  subIssues: {
+                    nodes: [{ number: 195, title: 'Upload static assets', state: 'OPEN' }],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      mockedExeca.mockResolvedValueOnce({ stdout: JSON.stringify(mockGraphQLResponse) } as any);
 
       const client = new GitHubClient({ repository: 'owner/repo' });
       const issues = await client.fetchIssues();
 
-      expect(issues).toEqual(mockIssues);
+      expect(issues).toHaveLength(1);
+      expect(issues[0].number).toBe(187);
+      expect(issues[0].blockedBy).toEqual([{ number: 186, title: 'Hostname routing', state: 'OPEN' }]);
+      expect(issues[0].subIssues).toEqual([{ number: 195, title: 'Upload static assets', state: 'OPEN' }]);
+      expect(issues[0].labels).toEqual([{ name: 'ready-for-agent', color: '0E8A16', description: 'Ready' }]);
+      expect(mockedExeca).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['api', 'graphql']),
+        expect.any(Object)
+      );
+    });
+
+    it('should fallback to gh issue list when GraphQL fails', async () => {
+      const mockCliIssues = [
+        { number: 1, title: 'Issue 1', body: 'Body 1', state: 'OPEN', labels: [], url: 'https://...', createdAt: '', updatedAt: '' },
+      ];
+
+      // First call (GraphQL) fails
+      mockedExeca.mockRejectedValueOnce(new Error('GraphQL error'));
+      // Second call (CLI list) succeeds
+      mockedExeca.mockResolvedValueOnce({ stdout: JSON.stringify(mockCliIssues) } as any);
+
+      const client = new GitHubClient({ repository: 'owner/repo' });
+      const issues = await client.fetchIssues();
+
+      expect(issues).toEqual(mockCliIssues);
       expect(mockedExeca).toHaveBeenCalledWith(
         'gh',
         expect.arrayContaining(['issue', 'list', '--repo', 'owner/repo']),
@@ -56,33 +109,31 @@ describe('GitHubClient', () => {
       );
     });
 
-    it('should allow overriding repo parameter', async () => {
-      mockedExeca.mockResolvedValueOnce({ stdout: '[]' } as any);
+    it('should fetch via CLI directly with fetchIssuesViaCli', async () => {
+      const mockIssues = [
+        { number: 1, title: 'Issue 1', body: 'Body 1', state: 'OPEN', labels: [], url: 'https://...', createdAt: '', updatedAt: '' },
+      ];
+      mockedExeca.mockResolvedValueOnce({ stdout: JSON.stringify(mockIssues) } as any);
 
-      const client = new GitHubClient({ repository: 'default/repo' });
-      const issues = await client.fetchIssues('custom/repo');
+      const client = new GitHubClient({ repository: 'owner/repo' });
+      const issues = await client.fetchIssuesViaCli();
 
-      expect(issues).toEqual([]);
-      expect(mockedExeca).toHaveBeenCalledWith(
-        'gh',
-        expect.arrayContaining(['issue', 'list', '--repo', 'custom/repo']),
-        expect.any(Object)
-      );
+      expect(issues).toEqual(mockIssues);
     });
 
-    it('should return empty array if output is blank', async () => {
+    it('should return empty array if output is blank in fetchIssuesViaCli', async () => {
       mockedExeca.mockResolvedValueOnce({ stdout: '   ' } as any);
 
       const client = new GitHubClient();
-      const issues = await client.fetchIssues();
+      const issues = await client.fetchIssuesViaCli();
       expect(issues).toEqual([]);
     });
 
-    it('should throw error on invalid JSON output', async () => {
+    it('should throw error on invalid JSON output in fetchIssuesViaCli', async () => {
       mockedExeca.mockResolvedValueOnce({ stdout: 'invalid json' } as any);
 
       const client = new GitHubClient();
-      await expect(client.fetchIssues()).rejects.toThrow('Failed to parse gh issue list output');
+      await expect(client.fetchIssuesViaCli()).rejects.toThrow('Failed to parse gh issue list output');
     });
   });
 

@@ -21,6 +21,12 @@ export interface GitHubComment {
   updatedAt?: string;
 }
 
+export interface NativeIssueRelation {
+  number: number;
+  title?: string;
+  state?: 'OPEN' | 'CLOSED' | string;
+}
+
 export interface GitHubIssue {
   number: number;
   title: string;
@@ -31,6 +37,10 @@ export interface GitHubIssue {
   createdAt: string;
   updatedAt: string;
   comments?: GitHubComment[];
+  blockedBy?: NativeIssueRelation[];
+  blocking?: NativeIssueRelation[];
+  parent?: { number: number; title?: string } | null;
+  subIssues?: NativeIssueRelation[];
 }
 
 export type TaskKind = 'spec' | 'ticket' | 'standalone';

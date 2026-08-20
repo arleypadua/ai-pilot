@@ -88,4 +88,87 @@ Follow-up to #31.
     expect(deps.parentNumber).toBe(17);
     expect(deps.kind).toBe('ticket');
   });
+
+  it('should not treat subtasks as blockers when inline Blocked by is used', () => {
+    const issue: GitHubIssue = {
+      number: 10,
+      title: '[Spec] Auth System',
+      body: 'Blocked by #5\nSubtasks:\n- [ ] #11\n- [ ] #12',
+      state: 'OPEN',
+      labels: [{ name: 'ready-for-agent' }],
+      url: 'https://github.com/owner/repo/issues/10',
+      createdAt: '2026-08-19T10:00:00Z',
+      updatedAt: '2026-08-19T10:00:00Z',
+    };
+
+    const deps = parseIssueDependencies(issue);
+    expect(deps.blockers).toEqual([5]);
+    expect(deps.subTaskNumbers).toEqual([11, 12]);
+    expect(deps.kind).toBe('spec');
+  });
+
+  it('should parse native GitHub blockedBy, parent, and subIssues', () => {
+    const issue: GitHubIssue = {
+      number: 187,
+      title: 'Spec: Vite/React SSR',
+      body: 'No blockers in text',
+      state: 'OPEN',
+      labels: [{ name: 'ready-for-agent' }],
+      url: 'https://github.com/owner/repo/issues/187',
+      createdAt: '2026-08-19T10:00:00Z',
+      updatedAt: '2026-08-19T10:00:00Z',
+      blockedBy: [
+        { number: 186, title: 'Hostname routing', state: 'OPEN' },
+        { number: 185, title: 'Feasibility spike', state: 'CLOSED' },
+      ],
+      subIssues: [
+        { number: 195, title: 'Upload static assets', state: 'OPEN' },
+        { number: 197, title: 'Storage allowance', state: 'OPEN' },
+      ],
+    };
+
+    const deps = parseIssueDependencies(issue);
+    expect(deps.blockers.sort()).toEqual([185, 186]);
+    expect(deps.subTaskNumbers.sort()).toEqual([195, 197]);
+    expect(deps.kind).toBe('spec');
+  });
+
+  it('should parse native parent relationship and mark as ticket', () => {
+    const issue: GitHubIssue = {
+      number: 195,
+      title: 'Upload static assets',
+      body: 'Task body without markdown parent',
+      state: 'OPEN',
+      labels: [{ name: 'ready-for-agent' }],
+      url: 'https://github.com/owner/repo/issues/195',
+      createdAt: '2026-08-19T10:00:00Z',
+      updatedAt: '2026-08-19T10:00:00Z',
+      parent: { number: 187, title: 'Spec: Vite/React SSR' },
+    };
+
+    const deps = parseIssueDependencies(issue);
+    expect(deps.parentNumber).toBe(187);
+    expect(deps.kind).toBe('ticket');
+  });
+
+  it('should merge native GitHub relationships with markdown body relationships', () => {
+    const issue: GitHubIssue = {
+      number: 50,
+      title: 'Task with mixed deps',
+      body: 'Blocked by #10\nParent: #100',
+      state: 'OPEN',
+      labels: [{ name: 'ready-for-agent' }],
+      url: 'https://github.com/owner/repo/issues/50',
+      createdAt: '2026-08-19T10:00:00Z',
+      updatedAt: '2026-08-19T10:00:00Z',
+      blockedBy: [{ number: 20, title: 'Native blocker', state: 'OPEN' }],
+      subIssues: [{ number: 51, title: 'Native subtask', state: 'OPEN' }],
+    };
+
+    const deps = parseIssueDependencies(issue);
+    expect(deps.blockers.sort()).toEqual([10, 20]);
+    expect(deps.parentNumber).toBe(100);
+    expect(deps.subTaskNumbers).toEqual([51]);
+    expect(deps.kind).toBe('ticket');
+  });
 });

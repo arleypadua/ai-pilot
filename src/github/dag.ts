@@ -57,16 +57,8 @@ export class IssueDAG {
       this.nodes.set(issue.number, node);
     }
 
-    // Second pass: establish two-way relationships (dependents, parent/child)
+    // Second pass: establish two-way relationships (parent/child)
     for (const [issueNumber, node] of this.nodes.entries()) {
-      // Connect blockers to dependents
-      for (const blockerId of node.blockers) {
-        const blockerNode = this.nodes.get(blockerId);
-        if (blockerNode && !blockerNode.dependents.includes(issueNumber)) {
-          blockerNode.dependents.push(issueNumber);
-        }
-      }
-
       // Connect parent to children
       if (node.parentNumber) {
         const parentNode = this.nodes.get(node.parentNumber);
@@ -81,6 +73,48 @@ export class IssueDAG {
         if (childNode && childNode.parentNumber === undefined) {
           childNode.parentNumber = issueNumber;
           childNode.kind = 'ticket';
+        }
+      }
+    }
+
+    // Propagate blockers from parent spec hierarchy down to child nodes
+    const getAncestorBlockers = (startNode: DAGNode): number[] => {
+      const inheritedBlockers = new Set<number>();
+      const visited = new Set<number>([startNode.issue.number]);
+      let currentParentNumber = startNode.parentNumber;
+
+      while (currentParentNumber !== undefined && !visited.has(currentParentNumber)) {
+        visited.add(currentParentNumber);
+        const parentNode = this.nodes.get(currentParentNumber);
+        if (!parentNode) break;
+
+        for (const bId of parentNode.blockers) {
+          if (bId !== startNode.issue.number) {
+            inheritedBlockers.add(bId);
+          }
+        }
+
+        currentParentNumber = parentNode.parentNumber;
+      }
+
+      return Array.from(inheritedBlockers);
+    };
+
+    for (const node of this.nodes.values()) {
+      const inherited = getAncestorBlockers(node);
+      for (const bId of inherited) {
+        if (!node.blockers.includes(bId)) {
+          node.blockers.push(bId);
+        }
+      }
+    }
+
+    // Connect blockers to dependents
+    for (const [issueNumber, node] of this.nodes.entries()) {
+      for (const blockerId of node.blockers) {
+        const blockerNode = this.nodes.get(blockerId);
+        if (blockerNode && !blockerNode.dependents.includes(issueNumber)) {
+          blockerNode.dependents.push(issueNumber);
         }
       }
     }
@@ -196,6 +230,33 @@ export class IssueDAG {
   public setTargetSpecs(specs: number[]): void {
     this.config.targetSpecs = specs;
     delete this.config.targetSpec;
+  }
+
+  public pruneCompletedTargetSpecs(): { removed: number[]; remaining: number[] } {
+    const current = this.getTargetSpecs();
+    if (current.length === 0) return { removed: [], remaining: [] };
+
+    const removed: number[] = [];
+    const remaining: number[] = [];
+
+    for (const specNum of current) {
+      const node = this.nodes.get(specNum);
+      const isClosed = !node || node.issue.state === 'CLOSED';
+      const specComplete = this.isSpecComplete(specNum);
+      const isComplete = specComplete.isComplete;
+
+      if (isClosed || isComplete) {
+        removed.push(specNum);
+      } else {
+        remaining.push(specNum);
+      }
+    }
+
+    if (removed.length > 0) {
+      this.setTargetSpecs(remaining);
+    }
+
+    return { removed, remaining };
   }
 
   public getReadyNodes(): DAGNode[] {

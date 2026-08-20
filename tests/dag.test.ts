@@ -347,6 +347,389 @@ describe('IssueDAG', () => {
     expect(dag.isSpecComplete(100).isComplete).toBe(true);
     expect(dag.isSpecComplete(200).isComplete).toBe(false);
   });
+
+  it('should prune closed and completed specs from targetSpecs', () => {
+    const issues: GitHubIssue[] = [
+      {
+        number: 100,
+        title: '[Spec] Feature 1 (Done)',
+        body: 'Subtasks:\n- [ ] #101',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/100',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 101,
+        title: 'Task 1.1',
+        body: 'Parent: #100',
+        state: 'CLOSED',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/101',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 200,
+        title: '[Spec] Feature 2 (In progress)',
+        body: 'Subtasks:\n- [ ] #201',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/200',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 201,
+        title: 'Task 2.1',
+        body: 'Parent: #200',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/201',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 300,
+        title: '[Spec] Feature 3 (Closed issue)',
+        body: 'Subtasks:\n- [ ] #301',
+        state: 'CLOSED',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/300',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 301,
+        title: 'Task 3.1',
+        body: 'Parent: #300',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/301',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+    ];
+
+    const dag = new IssueDAG({ ...DEFAULT_CONFIG, targetSpecs: [100, 200, 300] });
+    dag.build(issues);
+
+    const result = dag.pruneCompletedTargetSpecs();
+    expect(result.removed.sort()).toEqual([100, 300]);
+    expect(result.remaining).toEqual([200]);
+    expect(dag.getTargetSpecs()).toEqual([200]);
+
+    // Close #201 and prune again
+    issues[3].state = 'CLOSED';
+    dag.build(issues);
+
+    const result2 = dag.pruneCompletedTargetSpecs();
+    expect(result2.removed).toEqual([200]);
+    expect(result2.remaining).toEqual([]);
+    expect(dag.getTargetSpecs()).toEqual([]);
+  });
+
+  it('should mark all children of a spec as blocked if the spec is blocked by another ticket', () => {
+    const issues: GitHubIssue[] = [
+      {
+        number: 5,
+        title: 'Core Infrastructure Setup',
+        body: 'Set up base VPC and DB',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/5',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 10,
+        title: '[Spec] Auth System',
+        body: 'Blocked by #5\nSubtasks:\n- [ ] #11\n- [ ] #12',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/10',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 11,
+        title: 'Login endpoint',
+        body: 'Parent: #10',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/11',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 12,
+        title: 'Register endpoint',
+        body: 'Parent: #10',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/12',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+    ];
+
+    const dag = new IssueDAG(DEFAULT_CONFIG);
+    dag.build(issues);
+
+    const readyNodes = dag.getReadyNodes();
+    const blockedNodes = dag.getBlockedNodes();
+
+    // #5 is ready; #10, #11, #12 are blocked
+    expect(readyNodes.map((n) => n.issue.number)).toEqual([5]);
+    expect(blockedNodes.map((n) => n.issue.number).sort()).toEqual([10, 11, 12]);
+
+    // Children inherit #5 in their blocker list and unresolved blockers
+    const node11 = dag.getNode(11);
+    const node12 = dag.getNode(12);
+    expect(node11?.blockers).toContain(5);
+    expect(node12?.blockers).toContain(5);
+    expect(dag.getUnresolvedBlockers(11)).toEqual([5]);
+    expect(dag.getUnresolvedBlockers(12)).toEqual([5]);
+
+    // Blocker #5 has dependents [10, 11, 12]
+    const blockerNode = dag.getNode(5);
+    expect(blockerNode?.dependents.sort()).toEqual([10, 11, 12]);
+  });
+
+  it('should unblock spec children when the blocker ticket is closed', () => {
+    const issues: GitHubIssue[] = [
+      {
+        number: 5,
+        title: 'Core Infrastructure Setup',
+        body: 'Set up base VPC and DB',
+        state: 'CLOSED',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/5',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 10,
+        title: '[Spec] Auth System',
+        body: 'Blocked by #5\nSubtasks:\n- [ ] #11\n- [ ] #12',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/10',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 11,
+        title: 'Login endpoint',
+        body: 'Parent: #10',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/11',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 12,
+        title: 'Register endpoint',
+        body: 'Parent: #10',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/12',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+    ];
+
+    const dag = new IssueDAG(DEFAULT_CONFIG);
+    dag.build(issues);
+
+    const readyNodes = dag.getReadyNodes();
+    expect(readyNodes.map((n) => n.issue.number).sort()).toEqual([10, 11, 12]);
+    expect(dag.getBlockedNodes()).toEqual([]);
+  });
+
+  it('should combine direct blockers and parent spec blockers on a child ticket', () => {
+    const issues: GitHubIssue[] = [
+      {
+        number: 5,
+        title: 'Spec Blocker',
+        body: 'Spec blocker issue',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/5',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 7,
+        title: 'Child Direct Blocker',
+        body: 'Direct blocker issue',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/7',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 10,
+        title: '[Spec] Feature',
+        body: 'Blocked by #5\nSubtasks:\n- [ ] #11',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/10',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 11,
+        title: 'Feature Task',
+        body: 'Parent: #10\nBlocked by #7',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/11',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+    ];
+
+    const dag = new IssueDAG(DEFAULT_CONFIG);
+    dag.build(issues);
+
+    const node11 = dag.getNode(11);
+    expect(node11?.blockers.sort()).toEqual([5, 7]);
+    expect(dag.getUnresolvedBlockers(11).sort()).toEqual([5, 7]);
+    expect(node11?.status).toBe('blocked');
+
+    // Close only spec blocker #5: #11 still blocked by #7
+    issues[0].state = 'CLOSED';
+    dag.build(issues);
+    expect(dag.getNode(11)?.status).toBe('blocked');
+    expect(dag.getUnresolvedBlockers(11)).toEqual([7]);
+
+    // Close direct blocker #7: #11 is now ready
+    issues[1].state = 'CLOSED';
+    dag.build(issues);
+    expect(dag.getNode(11)?.status).toBe('ready');
+    expect(dag.getUnresolvedBlockers(11)).toEqual([]);
+  });
+
+  it('should recursively inherit blockers through nested spec hierarchies', () => {
+    const issues: GitHubIssue[] = [
+      {
+        number: 1,
+        title: 'Epic Blocker',
+        body: 'Blocks root epic',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/1',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 2,
+        title: 'Sub-spec Blocker',
+        body: 'Blocks sub-spec',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/2',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 10,
+        title: '[Spec] Root Epic',
+        body: 'Blocked by #1\nSubtasks:\n- [ ] #20',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/10',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 20,
+        title: '[Spec] Sub Spec',
+        body: 'Parent: #10\nBlocked by #2\nSubtasks:\n- [ ] #30',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/20',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 30,
+        title: 'Leaf Task',
+        body: 'Parent: #20',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/30',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+    ];
+
+    const dag = new IssueDAG(DEFAULT_CONFIG);
+    dag.build(issues);
+
+    const leafNode = dag.getNode(30);
+    // Leaf node #30 inherits blocker #2 from parent spec #20 and #1 from grandparent spec #10
+    expect(leafNode?.blockers.sort()).toEqual([1, 2]);
+    expect(leafNode?.status).toBe('blocked');
+    expect(dag.getUnresolvedBlockers(30).sort()).toEqual([1, 2]);
+  });
+
+  it('should block spec and its children when spec has native GitHub blockedBy', () => {
+    const issues: GitHubIssue[] = [
+      {
+        number: 186,
+        title: 'Spec: Hostname routing',
+        body: 'Hostname routing spec',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/186',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 187,
+        title: 'Spec: Vite/React SSR',
+        body: 'No blockers in text',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/187',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+        blockedBy: [{ number: 186, title: 'Spec: Hostname routing', state: 'OPEN' }],
+        subIssues: [{ number: 195, title: 'Upload static assets', state: 'OPEN' }],
+      },
+      {
+        number: 195,
+        title: 'Upload static assets',
+        body: 'Subtask body',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/195',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+        parent: { number: 187, title: 'Spec: Vite/React SSR' },
+      },
+    ];
+
+    const dag = new IssueDAG(DEFAULT_CONFIG);
+    dag.build(issues);
+
+    const specNode = dag.getNode(187);
+    const childNode = dag.getNode(195);
+
+    expect(specNode?.status).toBe('blocked');
+    expect(specNode?.blockers).toContain(186);
+
+    expect(childNode?.status).toBe('blocked');
+    expect(childNode?.blockers).toContain(186);
+
+    expect(dag.getReadyNodes().map((n) => n.issue.number)).toEqual([186]);
+    expect(dag.getBlockedNodes().map((n) => n.issue.number).sort()).toEqual([187, 195]);
+  });
 });
 
 describe('parseSpecsOption', () => {

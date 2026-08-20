@@ -120,13 +120,143 @@ export class GitHubClient {
   }
 
   /**
-   * Fetches issues from the repository using the GitHub CLI.
-   *
-   * @param repo - Optional repository override in `owner/repo` format. If omitted, the configured default repository is used.
-   * @returns A promise resolving to an array of {@link GitHubIssue} objects.
-   * @throws {Error} If the `gh issue list` command fails or if the command output cannot be parsed as JSON.
+   * Resolves the repository owner and name from the configured repository or current working directory.
    */
-  public async fetchIssues(repo?: string): Promise<GitHubIssue[]> {
+  public async getRepoOwnerAndName(overrideRepo?: string): Promise<{ owner: string; repo: string } | undefined> {
+    const targetRepo = overrideRepo ?? this.repository;
+    if (targetRepo && targetRepo.includes('/')) {
+      const [owner, repo] = targetRepo.split('/');
+      if (owner && repo) {
+        return { owner, repo };
+      }
+    }
+
+    try {
+      const { stdout } = await execa('gh', ['repo', 'view', ...(targetRepo ? [targetRepo] : []), '--json', 'owner,name'], {
+        cwd: this.cwd,
+      });
+      const data = JSON.parse(stdout);
+      if (data.owner?.login && data.name) {
+        return { owner: data.owner.login, repo: data.name };
+      }
+    } catch {
+      // Ignore error and return undefined
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Fetches issues via GitHub GraphQL API, including native relationships (blockedBy, blocking, parent, subIssues).
+   */
+  public async fetchIssuesViaGraphQL(owner: string, repoName: string): Promise<GitHubIssue[]> {
+    const query = `
+      query($owner: String!, $repo: String!) {
+        repository(owner: $owner, name: $repo) {
+          issues(first: 100, states: [OPEN, CLOSED], orderBy: {field: CREATED_AT, direction: DESC}) {
+            nodes {
+              number
+              title
+              body
+              state
+              url
+              createdAt
+              updatedAt
+              labels(first: 50) {
+                nodes {
+                  name
+                  color
+                  description
+                }
+              }
+              parent {
+                number
+                title
+              }
+              blockedBy(first: 50) {
+                nodes {
+                  number
+                  title
+                  state
+                }
+              }
+              blocking(first: 50) {
+                nodes {
+                  number
+                  title
+                  state
+                }
+              }
+              subIssues(first: 100) {
+                nodes {
+                  number
+                  title
+                  state
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const { stdout } = await execa(
+      'gh',
+      [
+        'api',
+        'graphql',
+        '-f',
+        `query=${query}`,
+        '-F',
+        `owner=${owner}`,
+        '-F',
+        `repo=${repoName}`,
+      ],
+      { cwd: this.cwd }
+    );
+
+    const data = JSON.parse(stdout);
+    const issueNodes = data.data?.repository?.issues?.nodes;
+    if (!Array.isArray(issueNodes)) {
+      throw new Error('GraphQL response did not contain repository issues');
+    }
+
+    return issueNodes.map((node: any) => ({
+      number: node.number,
+      title: node.title,
+      body: node.body || '',
+      state: node.state,
+      url: node.url,
+      createdAt: node.createdAt,
+      updatedAt: node.updatedAt,
+      labels: (node.labels?.nodes || []).map((l: any) => ({
+        name: l.name,
+        color: l.color,
+        description: l.description,
+      })),
+      parent: node.parent ? { number: node.parent.number, title: node.parent.title } : undefined,
+      blockedBy: (node.blockedBy?.nodes || []).map((b: any) => ({
+        number: b.number,
+        title: b.title,
+        state: b.state,
+      })),
+      blocking: (node.blocking?.nodes || []).map((b: any) => ({
+        number: b.number,
+        title: b.title,
+        state: b.state,
+      })),
+      subIssues: (node.subIssues?.nodes || []).map((s: any) => ({
+        number: s.number,
+        title: s.title,
+        state: s.state,
+      })),
+    }));
+  }
+
+  /**
+   * Fetches issues via standard gh issue list CLI command.
+   */
+  public async fetchIssuesViaCli(repo?: string): Promise<GitHubIssue[]> {
     const fields = 'number,title,body,state,labels,url,createdAt,updatedAt,comments';
     const args = ['issue', 'list', '--state', 'all', '--limit', '100', ...this.repoArgs(repo), '--json', fields];
 
@@ -141,6 +271,26 @@ export class GitHubClient {
     } catch (err) {
       throw new Error(`Failed to parse gh issue list output: ${err}\nOutput was: ${stdout}`);
     }
+  }
+
+  /**
+   * Fetches issues from the repository using the GitHub GraphQL API, falling back to GitHub CLI list.
+   *
+   * @param repo - Optional repository override in `owner/repo` format. If omitted, the configured default repository is used.
+   * @returns A promise resolving to an array of {@link GitHubIssue} objects.
+   * @throws {Error} If the command fails or if the command output cannot be parsed as JSON.
+   */
+  public async fetchIssues(repo?: string): Promise<GitHubIssue[]> {
+    try {
+      const repoInfo = await this.getRepoOwnerAndName(repo);
+      if (repoInfo) {
+        return await this.fetchIssuesViaGraphQL(repoInfo.owner, repoInfo.repo);
+      }
+    } catch {
+      // Fallback to CLI
+    }
+
+    return this.fetchIssuesViaCli(repo);
   }
 
   /**

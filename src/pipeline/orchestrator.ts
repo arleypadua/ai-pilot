@@ -198,7 +198,16 @@ export class Orchestrator {
       }
     }
 
-    // 5. Check for newly ready feedback tasks
+    // 5. Prune completed/closed target specs from the active target scope
+    const { removed: prunedSpecs, remaining: remainingSpecs } = this.dag.pruneCompletedTargetSpecs();
+    for (const specNum of prunedSpecs) {
+      this.dashboard.log(`Spec #${specNum} is completed/closed. Removed from target scope.`);
+    }
+    if (prunedSpecs.length > 0 && remainingSpecs.length === 0) {
+      this.dashboard.log('All scoped specs have completed. Target scope updated to any unblocked task (all specs).');
+    }
+
+    // 6. Check for newly ready feedback tasks
     const waitingNodes = this.dag.getWaitingFeedbackNodes();
     for (const node of waitingNodes) {
       const issue = node.issue;
