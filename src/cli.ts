@@ -35,7 +35,7 @@ program
   .option('-s, --spec <specs...>', 'Scope execution strictly to child tickets of specific Spec issue(s)', parseSpecsOption)
   .option('--specs <specs...>', 'Alias for --spec', parseSpecsOption)
   .option('-m, --concurrency <number>', 'Maximum parallel tasks', parseInt)
-  .option('--runner <runner>', 'Runner to use (claude, agy, pi, custom)', 'claude')
+  .option('--runner <runner>', 'Runner to use (claude, agy, pi, custom)')
   .option('--no-interactive', 'Disable interactive TUI dashboard (useful for CI/headless environments)')
   .action(async (options) => {
     try {
