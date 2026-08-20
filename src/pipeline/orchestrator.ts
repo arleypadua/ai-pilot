@@ -84,6 +84,10 @@ export class Orchestrator implements RemoteActionController {
             actionController: this,
             quotaMonitor: this.quotaMonitor,
           });
+        } else {
+          this.dashboard.log(
+            'Remote control is enabled, but no Telegram bot token was found in .env, ~/.imagos/credentials.json, or TELEGRAM_BOT_TOKEN.'
+          );
         }
       } catch (err: any) {
         this.dashboard.log(`Failed to initialize remote control provider: ${err.message}`);
@@ -193,7 +197,7 @@ export class Orchestrator implements RemoteActionController {
     }, this.config.pollIntervalSeconds * 1000);
   }
 
-  public stop(): void {
+  public async stop(): Promise<void> {
     this.isRunning = false;
     this.stateMgr.updateDaemonStatus('idle');
     if (this.pollTimer) {
@@ -201,7 +205,11 @@ export class Orchestrator implements RemoteActionController {
       this.pollTimer = undefined;
     }
     if (this.remoteManager) {
-      this.remoteManager.stop().catch(() => {});
+      try {
+        await this.remoteManager.stop();
+      } catch (err: any) {
+        this.dashboard.log(`Remote control stop warning: ${err.message}`);
+      }
     }
     this.dashboard.log('Agent Auto-Pilot stopped.');
   }

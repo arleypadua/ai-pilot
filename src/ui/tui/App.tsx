@@ -251,8 +251,10 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
     };
   }, [eventBus]);
 
-  const handleQuit = () => {
-    orchestrator.stop();
+  const handleQuit = async () => {
+    try {
+      await orchestrator.stop();
+    } catch {}
     if (onExit) {
       onExit();
     } else {

@@ -7,7 +7,15 @@ import path from 'node:path';
 import os from 'node:os';
 import * as readline from 'node:readline/promises';
 import { execa } from 'execa';
-import { loadConfig, saveConfig, detectRepository, getConfigPath, parseSpecsOption } from './config/schema.js';
+import {
+  loadConfig,
+  saveConfig,
+  detectRepository,
+  getConfigPath,
+  parseSpecsOption,
+  saveTelegramCredentials,
+  parseAllowedUserIds,
+} from './config/schema.js';
 import { Orchestrator } from './pipeline/orchestrator.js';
 import { GitHubClient } from './github/client.js';
 import { IssueDAG } from './github/dag.js';
@@ -37,6 +45,8 @@ program
   .option('-m, --concurrency <number>', 'Maximum parallel tasks', parseInt)
   .option('--runner <runner>', 'Runner to use (claude, agy, pi, custom)')
   .option('--no-interactive', 'Disable interactive TUI dashboard (useful for CI/headless environments)')
+  .option('--remote', 'Enable remote control via Telegram')
+  .option('--no-remote', 'Disable remote control')
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
@@ -48,6 +58,25 @@ program
       }
       if (options.concurrency) config.maxConcurrency = options.concurrency;
       if (options.runner) config.runner = options.runner;
+      if (options.remote !== undefined) {
+        if (!config.remote) {
+          config.remote = {
+            enabled: options.remote,
+            provider: 'telegram',
+            telegram: {
+              botTokenEnv: 'TELEGRAM_BOT_TOKEN',
+              notifications: {
+                needsInfo: true,
+                quotaPaused: true,
+                taskCompleted: true,
+                specCompleted: true,
+              },
+            },
+          };
+        } else {
+          config.remote.enabled = options.remote;
+        }
+      }
 
       if (!config.repository) {
         console.error(
@@ -62,33 +91,49 @@ program
 
       if (isInteractive) {
         const { startInteractiveDashboard } = await import('./ui/interactive.js');
-        const tui = startInteractiveDashboard(orchestrator, () => {
-          orchestrator.stop();
-          process.exit(0);
-        });
-
-        const shutdown = () => {
-          tui.unmount();
-          orchestrator.stop();
+        let tui: any;
+        let isShuttingDown = false;
+        const shutdown = async (signal?: string) => {
+          if (isShuttingDown) return;
+          isShuttingDown = true;
+          try {
+            tui?.unmount();
+          } catch {}
+          try {
+            await orchestrator.stop();
+          } catch (err: any) {
+            console.error(pc.red(`Error during shutdown: ${err.message}`));
+          }
           process.exit(0);
         };
 
-        process.on('SIGINT', shutdown);
-        process.on('SIGTERM', shutdown);
+        process.on('SIGINT', () => { shutdown('SIGINT'); });
+        process.on('SIGTERM', () => { shutdown('SIGTERM'); });
+
+        tui = startInteractiveDashboard(orchestrator, async () => {
+          await shutdown();
+        });
 
         await orchestrator.start();
         await tui.waitUntilExit();
-        process.exit(0);
+        await shutdown();
       } else {
         console.log(pc.cyan(`Starting Imagos for ${config.repository} (headless mode)...`));
-        const shutdown = () => {
-          console.log(pc.yellow('\nShutting down gracefully...'));
-          orchestrator.stop();
+        let isShuttingDown = false;
+        const shutdown = async (signal?: string) => {
+          if (isShuttingDown) return;
+          isShuttingDown = true;
+          console.log(pc.yellow(`\nShutting down gracefully${signal ? ` (${signal})` : ''}...`));
+          try {
+            await orchestrator.stop();
+          } catch (err: any) {
+            console.error(pc.red(`Error during shutdown: ${err.message}`));
+          }
           process.exit(0);
         };
 
-        process.on('SIGINT', shutdown);
-        process.on('SIGTERM', shutdown);
+        process.on('SIGINT', () => { shutdown('SIGINT'); });
+        process.on('SIGTERM', () => { shutdown('SIGTERM'); });
 
         await orchestrator.start();
       }
@@ -104,55 +149,112 @@ program
   .description('Initialize .autopilot/config.json for the current project')
   .option('-r, --repo <owner/repo>', 'GitHub repository')
   .option('--runner <runner>', 'Default runner to configure (e.g. claude, agy)')
+  .option('--remote', 'Enable remote control via Telegram')
+  .option('--no-remote', 'Disable remote control')
+  .option('--bot-token <token>', 'Telegram bot token (saved to credentials.json)')
+  .option('--user-id <id>', 'Allowed Telegram user ID')
   .action(async (options) => {
     try {
       const detectedRepo = options.repo || (await detectRepository());
 
       let selectedRunner = options.runner;
-      if (!selectedRunner) {
-        const hasClaude = await isBinaryAvailable('claude');
-        const hasAgy = await isBinaryAvailable('agy');
+      let remoteEnabled = options.remote ?? false;
+      let botToken = options.botToken;
+      let allowedUserIds = options.userId ? parseAllowedUserIds(options.userId) : undefined;
 
-        if (hasClaude && !hasAgy) {
-          selectedRunner = 'claude';
-          console.log(pc.cyan('\n✓ Auto-detected runner: ') + pc.bold(pc.green('Claude Code CLI (claude)')) + pc.gray(' (only installed provider found)'));
-        } else if (hasAgy && !hasClaude) {
-          selectedRunner = 'agy';
-          console.log(pc.cyan('\n✓ Auto-detected runner: ') + pc.bold(pc.green('Antigravity CLI (agy)')) + pc.gray(' (only installed provider found)'));
-        } else if (process.stdin.isTTY) {
-          if (hasClaude && hasAgy) {
-            console.log(pc.cyan('\nMultiple LLM runners detected on your system:'));
-            console.log(`  ${pc.bold('1)')} Claude Code CLI (${pc.green('claude')}) [installed] [default]`);
-            console.log(`  ${pc.bold('2)')} Antigravity CLI (${pc.green('agy')}) [installed]`);
-          } else {
-            console.log(pc.yellow('\nNo supported runner CLIs (claude, agy) detected in PATH.'));
-            console.log(pc.cyan('Select the default LLM runner to configure:'));
-            console.log(`  ${pc.bold('1)')} Claude Code CLI (${pc.green('claude')}) [default]`);
-            console.log(`  ${pc.bold('2)')} Antigravity CLI (${pc.green('agy')})`);
-          }
+      if (options.botToken || options.userId) {
+        if (options.remote !== false) {
+          remoteEnabled = true;
+        }
+      }
 
-          const rl = readline.createInterface({
+      let rl: readline.Interface | undefined;
+
+      const getRl = () => {
+        if (!rl && process.stdin.isTTY) {
+          rl = readline.createInterface({
             input: process.stdin,
             output: process.stdout,
           });
+        }
+        return rl;
+      };
 
-          try {
-            const answer = await rl.question(pc.yellow('\nChoose runner [1/2 or name] (default: 1): '));
-            const trimmed = answer.trim().toLowerCase();
-            if (trimmed === '2' || trimmed === 'agy') {
-              selectedRunner = 'agy';
-            } else if (trimmed === '1' || trimmed === 'claude' || trimmed === '') {
-              selectedRunner = 'claude';
-            } else {
-              selectedRunner = trimmed;
+      try {
+        if (!selectedRunner) {
+          const hasClaude = await isBinaryAvailable('claude');
+          const hasAgy = await isBinaryAvailable('agy');
+
+          if (hasClaude && !hasAgy) {
+            selectedRunner = 'claude';
+            console.log(pc.cyan('\n✓ Auto-detected runner: ') + pc.bold(pc.green('Claude Code CLI (claude)')) + pc.gray(' (only installed provider found)'));
+          } else if (hasAgy && !hasClaude) {
+            selectedRunner = 'agy';
+            console.log(pc.cyan('\n✓ Auto-detected runner: ') + pc.bold(pc.green('Antigravity CLI (agy)')) + pc.gray(' (only installed provider found)'));
+          } else if (process.stdin.isTTY) {
+            const promptRl = getRl();
+            if (promptRl) {
+              if (hasClaude && hasAgy) {
+                console.log(pc.cyan('\nMultiple LLM runners detected on your system:'));
+                console.log(`  ${pc.bold('1)')} Claude Code CLI (${pc.green('claude')}) [installed] [default]`);
+                console.log(`  ${pc.bold('2)')} Antigravity CLI (${pc.green('agy')}) [installed]`);
+              } else {
+                console.log(pc.yellow('\nNo supported runner CLIs (claude, agy) detected in PATH.'));
+                console.log(pc.cyan('Select the default LLM runner to configure:'));
+                console.log(`  ${pc.bold('1)')} Claude Code CLI (${pc.green('claude')}) [default]`);
+                console.log(`  ${pc.bold('2)')} Antigravity CLI (${pc.green('agy')})`);
+              }
+
+              const answer = await promptRl.question(pc.yellow('\nChoose runner [1/2 or name] (default: 1): '));
+              const trimmed = answer.trim().toLowerCase();
+              if (trimmed === '2' || trimmed === 'agy') {
+                selectedRunner = 'agy';
+              } else if (trimmed === '1' || trimmed === 'claude' || trimmed === '') {
+                selectedRunner = 'claude';
+              } else {
+                selectedRunner = trimmed;
+              }
             }
-          } finally {
-            rl.close();
           }
+        }
+
+        if (options.remote === undefined && !options.botToken && !options.userId && process.stdin.isTTY) {
+          const promptRl = getRl();
+          if (promptRl) {
+            console.log(pc.cyan('\nTelegram Remote Control:'));
+            console.log(pc.gray('Allows monitoring notifications, answering questions, and sending commands via Telegram.'));
+            const remoteAnswer = await promptRl.question(pc.yellow('Enable Telegram remote control? [y/N]: '));
+            const isYes = ['y', 'yes', 'true', '1'].includes(remoteAnswer.trim().toLowerCase());
+            if (isYes) {
+              remoteEnabled = true;
+              const tokenAnswer = await promptRl.question(pc.yellow('Enter Telegram Bot Token (from @BotFather, press Enter to skip): '));
+              if (tokenAnswer.trim()) {
+                botToken = tokenAnswer.trim();
+              }
+              const userAnswer = await promptRl.question(pc.yellow('Enter your Telegram User ID (numeric, from @userinfobot, press Enter to skip): '));
+              if (userAnswer.trim()) {
+                allowedUserIds = parseAllowedUserIds(userAnswer.trim());
+              }
+            }
+          }
+        }
+      } finally {
+        if (rl) {
+          rl.close();
         }
       }
 
       const runner = selectedRunner || 'claude';
+
+      // Save credentials if botToken or allowedUserIds were provided
+      if (botToken || (allowedUserIds && allowedUserIds.length > 0)) {
+        const savedCredsPath = saveTelegramCredentials({
+          repository: detectedRepo && detectedRepo !== 'owner/repo' ? detectedRepo : undefined,
+          botToken: botToken ? botToken.trim() : undefined,
+          allowedUserIds: allowedUserIds && allowedUserIds.length > 0 ? allowedUserIds : undefined,
+        });
+        console.log(pc.green(`✓ Saved Telegram credentials to ${savedCredsPath}`));
+      }
 
       const config = {
         $schema: 'https://raw.githubusercontent.com/arleypadua/imagos/main/schema.json',
@@ -165,6 +267,20 @@ program
         autoMerge: true,
         mergeMethod: 'squash',
         cleanupWorktreeOnClose: true,
+        remote: {
+          enabled: remoteEnabled,
+          provider: 'telegram',
+          telegram: {
+            botTokenEnv: 'TELEGRAM_BOT_TOKEN',
+            ...(allowedUserIds && allowedUserIds.length > 0 ? { allowedUserIds } : {}),
+            notifications: {
+              needsInfo: true,
+              quotaPaused: true,
+              taskCompleted: true,
+              specCompleted: true,
+            },
+          },
+        },
         quota: {
           pauseOnLimit: true,
           utilizationThreshold: 0.95,
@@ -181,6 +297,7 @@ program
       const savedPath = saveConfig(config as any);
       console.log(pc.green(`\n✓ Created ${savedPath}`));
       console.log(pc.green(`✓ Configured default runner: ${pc.bold(runner)}`));
+      console.log(pc.green(`✓ Configured remote control: ${pc.bold(remoteEnabled ? 'Telegram (enabled)' : 'Telegram (disabled)')}`));
       console.log(pc.green('✓ Updated .gitignore (tracking config.json, ignoring runtime state/worktrees)'));
     } catch (err: any) {
       console.error(pc.red(`Failed to initialize config: ${err.message}`));
