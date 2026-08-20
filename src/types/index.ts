@@ -121,8 +121,40 @@ export interface TelegramNotificationsConfig {
   specCompleted: boolean;
 }
 
+export interface TelegramBotConfig {
+  token: string;
+  allowedChatIds?: (number | string)[];
+  allowedUserIds?: number[];
+  defaultChatId?: number | string;
+  [key: string]: unknown;
+}
+
+export type TelegramBotCredentials = TelegramBotConfig;
+
+export interface UserTelegramConfig {
+  bots?: Record<string, TelegramBotConfig>;
+  [key: string]: unknown;
+}
+
+export interface UserConfig {
+  telegram?: UserTelegramConfig;
+  [key: string]: unknown;
+}
+
+export interface TelegramRepoConfig {
+  enabled?: boolean;
+  bot?: string;
+  botTokenEnv?: string;
+  allowedChatIds?: (number | string)[];
+  allowedUserIds?: number[];
+  defaultChatId?: number | string;
+  notifications?: TelegramNotificationsConfig;
+}
+
 export interface TelegramRemoteConfig {
+  bot?: string;
   botTokenEnv: string;
+  allowedChatIds?: (number | string)[];
   allowedUserIds?: number[];
   defaultChatId?: number | string;
   notifications: TelegramNotificationsConfig;
@@ -160,17 +192,23 @@ export type CredentialSource =
   | 'env_file'
   | 'credentials_file_repo'
   | 'credentials_file_global'
+  | 'user_config'
+  | 'env_override'
   | 'process_env'
   | 'config'
   | 'none';
 
 export interface ResolvedTelegramCredentials {
+  bot?: string;
+  botHandle?: string;
   botToken?: string;
+  allowedChatIds?: (number | string)[];
   allowedUserIds?: number[];
   defaultChatId?: number | string;
   source: {
     botToken: CredentialSource;
     allowedUserIds: CredentialSource;
+    allowedChatIds?: CredentialSource;
     defaultChatId: CredentialSource;
   };
 }
@@ -179,10 +217,13 @@ export interface ResolveCredentialsOptions {
   cwd?: string;
   envPath?: string;
   credentialsPath?: string;
+  userConfigPath?: string;
   homeDir?: string;
   repository?: string;
+  bot?: string;
   config?: AutoPilotConfig | Partial<AutoPilotConfig>;
   env?: NodeJS.ProcessEnv;
+  strict?: boolean;
 }
 
 export interface SaveTelegramCredentialsOptions {
@@ -190,6 +231,14 @@ export interface SaveTelegramCredentialsOptions {
   allowedUserIds?: number[];
   defaultChatId?: number | string;
   repository?: string;
+  customPath?: string;
+  homeDir?: string;
+}
+
+export interface SaveTelegramBotOptions {
+  botHandle: string;
+  token: string;
+  allowedChatIds?: (number | string)[];
   customPath?: string;
   homeDir?: string;
 }
@@ -224,6 +273,7 @@ export interface AutoPilotConfig {
   autoMerge: boolean;
   mergeMethod: 'squash' | 'merge' | 'rebase';
   cleanupWorktreeOnClose: boolean;
+  telegram?: TelegramRepoConfig;
   remote: RemoteControlConfig;
   quota: {
     pauseOnLimit: boolean;

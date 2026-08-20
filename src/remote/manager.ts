@@ -41,6 +41,11 @@ import {
   formatTaskActionResponse,
   parseTaskActionPayload,
   parseSpecActionPayload,
+  formatCleanResult,
+  formatInspect,
+  formatInspectHelp,
+  formatLogs,
+  formatLogsHelp,
 } from './formatters.js';
 import type { QuotaMonitor } from '../quota/monitor.js';
 
@@ -185,6 +190,15 @@ export class RemoteControlManager {
       });
       this.provider.onCommand('specs', async (args, userId, context) => {
         await this.handleSpecsCommand(args, userId, context);
+      });
+      this.provider.onCommand('clean', async (args, userId, context) => {
+        await this.handleCleanCommand(args, userId, context);
+      });
+      this.provider.onCommand('inspect', async (args, userId, context) => {
+        await this.handleInspectCommand(args, userId, context);
+      });
+      this.provider.onCommand('logs', async (args, userId, context) => {
+        await this.handleLogsCommand(args, userId, context);
       });
       this.provider.onCommand('help', async (args, userId, context) => {
         await this.handleHelpCommand(args, userId, context);
@@ -799,6 +813,85 @@ export class RemoteControlManager {
     };
 
     const text = formatHelp(this.repository, securityInfo);
+    await this.provider.sendMessage(text, {
+      chatId: context?.chatId ?? this.defaultChatId,
+      parseMode: 'Markdown',
+    });
+  }
+
+  public async handleCleanCommand(
+    _args: string[],
+    _userId: number,
+    context?: ActionContext
+  ): Promise<void> {
+    let count = 0;
+    if (this.actionController?.cleanWorktrees) {
+      try {
+        const res = await this.actionController.cleanWorktrees();
+        count = res.count ?? 0;
+      } catch (err: any) {
+        console.error('RemoteControlManager error executing cleanWorktrees:', err);
+      }
+    }
+    const text = formatCleanResult(this.repository, count);
+    await this.provider.sendMessage(text, {
+      chatId: context?.chatId ?? this.defaultChatId,
+      parseMode: 'Markdown',
+    });
+  }
+
+  public async handleInspectCommand(
+    args: string[],
+    _userId: number,
+    context?: ActionContext
+  ): Promise<void> {
+    if (args.length > 0) {
+      const issueNum = parseInt(args[0].replace(/^#/, ''), 10);
+      if (!isNaN(issueNum) && this.actionController?.getInspectSummary) {
+        try {
+          const details = await this.actionController.getInspectSummary(issueNum);
+          const text = formatInspect(this.repository, issueNum, details);
+          await this.provider.sendMessage(text, {
+            chatId: context?.chatId ?? this.defaultChatId,
+            parseMode: 'Markdown',
+          });
+          return;
+        } catch (err: any) {
+          console.error(`RemoteControlManager error executing getInspectSummary for #${issueNum}:`, err);
+        }
+      }
+    }
+
+    const text = formatInspectHelp(this.repository);
+    await this.provider.sendMessage(text, {
+      chatId: context?.chatId ?? this.defaultChatId,
+      parseMode: 'Markdown',
+    });
+  }
+
+  public async handleLogsCommand(
+    args: string[],
+    _userId: number,
+    context?: ActionContext
+  ): Promise<void> {
+    if (args.length > 0) {
+      const issueNum = parseInt(args[0].replace(/^#/, ''), 10);
+      if (!isNaN(issueNum) && this.actionController?.getLogsSummary) {
+        try {
+          const logs = await this.actionController.getLogsSummary(issueNum, 30);
+          const text = formatLogs(this.repository, issueNum, logs);
+          await this.provider.sendMessage(text, {
+            chatId: context?.chatId ?? this.defaultChatId,
+            parseMode: 'Markdown',
+          });
+          return;
+        } catch (err: any) {
+          console.error(`RemoteControlManager error executing getLogsSummary for #${issueNum}:`, err);
+        }
+      }
+    }
+
+    const text = formatLogsHelp(this.repository);
     await this.provider.sendMessage(text, {
       chatId: context?.chatId ?? this.defaultChatId,
       parseMode: 'Markdown',

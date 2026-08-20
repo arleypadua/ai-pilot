@@ -34,6 +34,7 @@ vi.mock('../src/config/credentials.js', async (importOriginal) => {
   return {
     ...actual,
     saveTelegramCredentials: vi.fn().mockReturnValue('/mock/home/.imagos/credentials.json'),
+    saveTelegramBot: vi.fn().mockReturnValue('/mock/home/.imagos/config.json'),
   };
 });
 
@@ -143,6 +144,35 @@ describe('imagos init CLI command', () => {
       expect(schemaModule.saveConfig).toHaveBeenCalled();
       const savedConfig = vi.mocked(schemaModule.saveConfig).mock.calls[0][0];
       expect(savedConfig.remote.enabled).toBe(false);
+    });
+
+    it('initializes config with telegram.bot and saves bot credentials when --telegram-bot and --telegram-token are passed', async () => {
+      await program.parseAsync([
+        'node',
+        'imagos',
+        'init',
+        '--repo',
+        'owner/my-repo',
+        '--runner',
+        'claude',
+        '--telegram-bot',
+        '@imagos_backend_bot',
+        '--telegram-token',
+        '123456:BOT-TOKEN',
+        '--telegram-chat-ids',
+        '123456789,-1001234567890',
+      ]);
+
+      expect(credentialsModule.saveTelegramBot).toHaveBeenCalledWith('@imagos_backend_bot', {
+        token: '123456:BOT-TOKEN',
+        allowedChatIds: [123456789, -1001234567890],
+      });
+
+      expect(schemaModule.saveConfig).toHaveBeenCalled();
+      const savedConfig = vi.mocked(schemaModule.saveConfig).mock.calls[0][0];
+      expect(savedConfig.telegram?.enabled).toBe(true);
+      expect(savedConfig.telegram?.bot).toBe('@imagos_backend_bot');
+      expect(savedConfig.remote.enabled).toBe(true);
     });
   });
 

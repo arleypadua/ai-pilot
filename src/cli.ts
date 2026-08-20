@@ -13,6 +13,9 @@ import {
   detectRepository,
   getConfigPath,
   parseSpecsOption,
+  loadUserConfig,
+  saveTelegramBot,
+  parseAllowedChatIds,
   saveTelegramCredentials,
   parseAllowedUserIds,
 } from './config/schema.js';
@@ -26,6 +29,35 @@ import type { DAGNode, GitHubLabel } from './types/index.js';
 import Table from 'cli-table3';
 
 export { parseSpecsOption };
+
+async function promptNewBot(rl: readline.Interface, initialHandle?: string): Promise<string> {
+  let handle = initialHandle;
+  if (!handle) {
+    const handleAns = await rl.question(pc.yellow('Enter Telegram Bot Handle (e.g. @imagos_backend_bot): '));
+    handle = handleAns.trim();
+  }
+  if (!handle) {
+    handle = '@imagos_bot';
+  }
+  const normalizedHandle = handle.startsWith('@') ? handle : `@${handle}`;
+
+  const tokenAns = await rl.question(pc.yellow(`Enter Bot Token for ${normalizedHandle}: `));
+  const token = tokenAns.trim();
+
+  const chatIdsAns = await rl.question(
+    pc.yellow('Enter Allowed Chat IDs (comma-separated, e.g. 123456789, or leave empty): ')
+  );
+  const allowedChatIds = parseAllowedChatIds(chatIdsAns) || [];
+
+  if (token) {
+    saveTelegramBot(normalizedHandle, { token, allowedChatIds });
+    console.log(pc.green(`✓ Saved bot credentials for ${pc.bold(normalizedHandle)} in ~/.imagos/config.json`));
+  } else {
+    console.log(pc.yellow(`⚠️ Warning: No token entered. Saved handle ${normalizedHandle} without token.`));
+  }
+
+  return normalizedHandle;
+}
 
 const program = new Command();
 
@@ -149,6 +181,11 @@ program
   .description('Initialize .autopilot/config.json for the current project')
   .option('-r, --repo <owner/repo>', 'GitHub repository')
   .option('--runner <runner>', 'Default runner to configure (e.g. claude, agy)')
+  .option('--telegram', 'Enable Telegram integration')
+  .option('--no-telegram', 'Disable Telegram integration')
+  .option('--telegram-bot <handle>', 'Telegram bot handle (e.g. @imagos_backend_bot)')
+  .option('--telegram-token <token>', 'Telegram bot token (saved to ~/.imagos/config.json)')
+  .option('--telegram-chat-ids <ids>', 'Allowed chat IDs (comma-separated, e.g. 123456789,-1001234567890)')
   .option('--remote', 'Enable remote control via Telegram')
   .option('--no-remote', 'Disable remote control')
   .option('--bot-token <token>', 'Telegram bot token (saved to credentials.json)')
@@ -158,12 +195,14 @@ program
       const detectedRepo = options.repo || (await detectRepository());
 
       let selectedRunner = options.runner;
-      let remoteEnabled = options.remote ?? false;
-      let botToken = options.botToken;
+      let remoteEnabled = options.remote ?? options.telegram ?? false;
+      let botToken = options.botToken ?? options.telegramToken;
       let allowedUserIds = options.userId ? parseAllowedUserIds(options.userId) : undefined;
+      let allowedChatIds = options.telegramChatIds ? parseAllowedChatIds(options.telegramChatIds) : undefined;
+      let selectedBotHandle = options.telegramBot;
 
-      if (options.botToken || options.userId) {
-        if (options.remote !== false) {
+      if (options.botToken || options.userId || options.telegramToken || options.telegramChatIds || options.telegramBot) {
+        if (options.remote !== false && options.telegram !== false) {
           remoteEnabled = true;
         }
       }
@@ -218,7 +257,7 @@ program
           }
         }
 
-        if (options.remote === undefined && !options.botToken && !options.userId && process.stdin.isTTY) {
+        if (options.remote === undefined && options.telegram === undefined && !options.botToken && !options.telegramToken && !options.userId && !options.telegramBot && process.stdin.isTTY) {
           const promptRl = getRl();
           if (promptRl) {
             console.log(pc.cyan('\nTelegram Remote Control:'));
@@ -246,8 +285,14 @@ program
 
       const runner = selectedRunner || 'claude';
 
-      // Save credentials if botToken or allowedUserIds were provided
-      if (botToken || (allowedUserIds && allowedUserIds.length > 0)) {
+      // Save credentials if provided
+      if (selectedBotHandle && botToken) {
+        saveTelegramBot(selectedBotHandle, {
+          token: botToken,
+          allowedChatIds: allowedChatIds || [],
+        });
+        console.log(pc.green(`✓ Saved bot credentials for ${pc.bold(selectedBotHandle)} in ~/.imagos/config.json`));
+      } else if (botToken || (allowedUserIds && allowedUserIds.length > 0)) {
         const savedCredsPath = saveTelegramCredentials({
           repository: detectedRepo && detectedRepo !== 'owner/repo' ? detectedRepo : undefined,
           botToken: botToken ? botToken.trim() : undefined,
@@ -256,7 +301,7 @@ program
         console.log(pc.green(`✓ Saved Telegram credentials to ${savedCredsPath}`));
       }
 
-      const config = {
+      const config: Record<string, any> = {
         $schema: 'https://raw.githubusercontent.com/arleypadua/imagos/main/schema.json',
         repository: detectedRepo || 'owner/repo',
         baseBranch: 'main',
@@ -272,7 +317,9 @@ program
           provider: 'telegram',
           telegram: {
             botTokenEnv: 'TELEGRAM_BOT_TOKEN',
+            ...(selectedBotHandle ? { bot: selectedBotHandle } : {}),
             ...(allowedUserIds && allowedUserIds.length > 0 ? { allowedUserIds } : {}),
+            ...(allowedChatIds && allowedChatIds.length > 0 ? { allowedChatIds } : {}),
             notifications: {
               needsInfo: true,
               quotaPaused: true,
@@ -294,9 +341,19 @@ program
         },
       };
 
+      if (selectedBotHandle && remoteEnabled) {
+        config.telegram = {
+          enabled: true,
+          bot: selectedBotHandle,
+        };
+      }
+
       const savedPath = saveConfig(config as any);
       console.log(pc.green(`\n✓ Created ${savedPath}`));
       console.log(pc.green(`✓ Configured default runner: ${pc.bold(runner)}`));
+      if (selectedBotHandle) {
+        console.log(pc.green(`✓ Configured Telegram bot handle: ${pc.bold(selectedBotHandle)}`));
+      }
       console.log(pc.green(`✓ Configured remote control: ${pc.bold(remoteEnabled ? 'Telegram (enabled)' : 'Telegram (disabled)')}`));
       console.log(pc.green('✓ Updated .gitignore (tracking config.json, ignoring runtime state/worktrees)'));
     } catch (err: any) {

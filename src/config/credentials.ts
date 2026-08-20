@@ -9,8 +9,37 @@ import type {
   ResolvedTelegramCredentials,
   ResolveCredentialsOptions,
   SaveTelegramCredentialsOptions,
+  SaveTelegramBotOptions,
   CredentialSource,
+  UserConfig,
+  TelegramBotConfig,
 } from '../types/index.js';
+
+export const TelegramBotConfigSchema = z
+  .object({
+    token: z.string().optional(),
+    botToken: z.string().optional(),
+    allowedChatIds: z.array(z.union([z.number().int(), z.string()])).optional(),
+    allowedUserIds: z.array(z.number().int()).optional(),
+    defaultChatId: z.union([z.number().int(), z.string()]).optional(),
+  })
+  .passthrough()
+  .transform((val) => ({
+    ...val,
+    token: val.token || val.botToken || '',
+  }));
+
+export const GlobalTelegramConfigSchema = z
+  .object({
+    bots: z.record(TelegramBotConfigSchema).optional().default({}),
+  })
+  .passthrough();
+
+export const UserConfigSchema = z
+  .object({
+    telegram: GlobalTelegramConfigSchema.optional(),
+  })
+  .passthrough();
 
 export const TelegramRepoCredentialsSchema = z
   .object({
@@ -107,6 +136,74 @@ export function parseAllowedUserIds(value: unknown): number[] | undefined {
 }
 
 /**
+ * Parses allowed chat IDs from various formats: number, string, array, or comma-separated string / JSON array string.
+ */
+export function parseAllowedChatIds(value: unknown): (number | string)[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    const ids = value
+      .map((item) => {
+        if (typeof item === 'number' && Number.isInteger(item)) {
+          return item;
+        }
+        if (typeof item === 'string') {
+          const trimmed = item.trim();
+          if (/^-?\d+$/.test(trimmed)) {
+            const parsed = parseInt(trimmed, 10);
+            return isNaN(parsed) ? trimmed : parsed;
+          }
+          return trimmed || undefined;
+        }
+        return undefined;
+      })
+      .filter((item): item is number | string => item !== undefined);
+
+    const uniqueIds = Array.from(new Set(ids));
+    return uniqueIds.length > 0 ? uniqueIds : undefined;
+  }
+
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    return [value];
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return parseAllowedChatIds(parsed);
+      } catch {
+        // Fall through to comma-separated parsing
+      }
+    }
+
+    const parts = trimmed.split(',');
+    const ids = parts
+      .map((part) => {
+        const pTrimmed = part.trim();
+        if (/^-?\d+$/.test(pTrimmed)) {
+          const parsed = parseInt(pTrimmed, 10);
+          return isNaN(parsed) ? pTrimmed : parsed;
+        }
+        return pTrimmed || undefined;
+      })
+      .filter((item): item is number | string => item !== undefined);
+
+    const uniqueIds = Array.from(new Set(ids));
+    return uniqueIds.length > 0 ? uniqueIds : undefined;
+  }
+
+  return undefined;
+}
+
+/**
  * Parses chat ID from integer or string.
  */
 export function parseChatId(value: unknown): number | string | undefined {
@@ -141,6 +238,14 @@ export function parseChatId(value: unknown): number | string | undefined {
 export function getCredentialsPath(homeDir?: string): string {
   const baseDir = homeDir || process.env.IMAGOS_HOME || os.homedir();
   return path.join(baseDir, '.imagos', 'credentials.json');
+}
+
+/**
+ * Returns the destination path for user config.json (default: ~/.imagos/config.json).
+ */
+export function getUserConfigPath(homeDir?: string): string {
+  const baseDir = homeDir || process.env.IMAGOS_HOME || os.homedir();
+  return path.join(baseDir, '.imagos', 'config.json');
 }
 
 /**
@@ -193,6 +298,127 @@ export function saveCredentialsFile(
   }
 
   return dest;
+}
+
+/**
+ * Loads and validates global user config from ~/.imagos/config.json or a custom path.
+ */
+export function loadUserConfig(
+  customPath?: string,
+  homeDir?: string
+): UserConfig | null {
+  const filePath = customPath ? path.resolve(customPath) : getUserConfigPath(homeDir);
+
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (!raw.trim()) {
+      return {};
+    }
+    const json = JSON.parse(raw);
+    return UserConfigSchema.parse(json);
+  } catch (err) {
+    throw new Error(`Failed to parse user configuration file at ${filePath}: ${err}`);
+  }
+}
+
+/**
+ * Saves global user config to ~/.imagos/config.json or a custom path with strict 0600 permissions.
+ */
+export function saveUserConfig(
+  config: UserConfig,
+  customPath?: string,
+  homeDir?: string
+): string {
+  const dest = customPath ? path.resolve(customPath) : getUserConfigPath(homeDir);
+  const parentDir = path.dirname(dest);
+
+  if (!fs.existsSync(parentDir)) {
+    fs.mkdirSync(parentDir, { recursive: true, mode: 0o700 });
+  }
+
+  const serialized = JSON.stringify(config, null, 2);
+  fs.writeFileSync(dest, serialized, { encoding: 'utf8', mode: 0o600 });
+
+  try {
+    fs.chmodSync(dest, 0o600);
+  } catch {
+    // Non-fatal on platforms without POSIX permission support
+  }
+
+  return dest;
+}
+
+/**
+ * Saves or updates Telegram bot credentials in ~/.imagos/config.json under telegram.bots[botHandle].
+ */
+export function saveTelegramBot(
+  botHandleOrOptions: string | SaveTelegramBotOptions,
+  botConfig?: { token: string; allowedChatIds?: (number | string)[] },
+  customPath?: string,
+  homeDir?: string
+): string {
+  let handle: string;
+  let token: string;
+  let allowedChatIds: (number | string)[] | undefined;
+  let targetPath = customPath;
+  let targetHome = homeDir;
+
+  if (typeof botHandleOrOptions === 'object') {
+    handle = botHandleOrOptions.botHandle;
+    token = botHandleOrOptions.token;
+    allowedChatIds = botHandleOrOptions.allowedChatIds;
+    targetPath = botHandleOrOptions.customPath;
+    targetHome = botHandleOrOptions.homeDir;
+  } else {
+    handle = botHandleOrOptions;
+    token = botConfig?.token || '';
+    allowedChatIds = botConfig?.allowedChatIds;
+  }
+
+  let config: UserConfig = {};
+  try {
+    const existing = loadUserConfig(targetPath, targetHome);
+    if (existing) {
+      config = existing;
+    }
+  } catch {
+    // Start fresh if unreadable
+  }
+
+  if (!config.telegram) {
+    config.telegram = {};
+  }
+  if (!config.telegram.bots) {
+    config.telegram.bots = {};
+  }
+
+  const normalizedHandle = handle.startsWith('@') ? handle : `@${handle}`;
+  config.telegram.bots[normalizedHandle] = {
+    token,
+    allowedChatIds: allowedChatIds || [],
+  };
+
+  return saveUserConfig(config, targetPath, targetHome);
+}
+
+/**
+ * Retrieves a Telegram bot configuration by handle from ~/.imagos/config.json.
+ */
+export function getTelegramBot(
+  botHandle: string,
+  customPath?: string,
+  homeDir?: string
+): TelegramBotConfig | null {
+  const config = loadUserConfig(customPath, homeDir);
+  if (!config?.telegram?.bots) return null;
+  const bots = config.telegram.bots;
+  const normalizedHandle = botHandle.startsWith('@') ? botHandle : `@${botHandle}`;
+  const rawHandle = botHandle.replace(/^@/, '');
+  return bots[botHandle] || bots[normalizedHandle] || bots[rawHandle] || null;
 }
 
 /**
@@ -250,15 +476,134 @@ export function saveTelegramCredentials(options: SaveTelegramCredentialsOptions 
 }
 
 /**
- * Resolves Telegram credentials across 3 tiers in hierarchical priority order:
- * 1. Local repository .env file
- * 2. User credentials file (~/.imagos/credentials.json), checking repository override then global
- * 3. Process environment variables (process.env)
- * 4. Configuration object fallback (for allowedUserIds / defaultChatId)
+ * Resolves Telegram credentials across hierarchical tiers:
+ * 1. IMAGOS_TELEGRAM_BOT_TOKEN environment variable override
+ * 2. Repository bot handle (telegram.bot) looked up in user config (~/.imagos/config.json)
+ * 3. Local repository .env file
+ * 4. User credentials file (~/.imagos/credentials.json), checking repository override then global
+ * 5. Process environment variables (process.env)
+ * 6. Configuration object fallback (for allowedUserIds / defaultChatId)
  */
 export function resolveTelegramCredentials(
   options: ResolveCredentialsOptions = {}
 ): ResolvedTelegramCredentials {
+  const processEnv = options.env || process.env;
+
+  // 1. Check IMAGOS_TELEGRAM_BOT_TOKEN environment variable override
+  const envOverrideToken = processEnv['IMAGOS_TELEGRAM_BOT_TOKEN']?.trim();
+
+  // Check if Telegram is enabled
+  const isTelegramEnabled = Boolean(
+    options.config?.telegram?.enabled ||
+    (options.config?.remote?.enabled &&
+      (options.config.remote.provider === 'telegram' || !options.config.remote.provider)) ||
+    options.strict
+  );
+
+  const botHandle = (
+    options.bot ||
+    options.config?.telegram?.bot ||
+    options.config?.remote?.telegram?.bot
+  )?.trim();
+
+  // If environment override is provided
+  if (envOverrideToken) {
+    let allowedChatIds = parseAllowedChatIds(
+      options.config?.telegram?.allowedChatIds || options.config?.remote?.telegram?.allowedChatIds
+    );
+    let allowedUserIds = parseAllowedUserIds(
+      options.config?.telegram?.allowedUserIds || options.config?.remote?.telegram?.allowedUserIds
+    );
+    let defaultChatId = parseChatId(
+      options.config?.telegram?.defaultChatId ?? options.config?.remote?.telegram?.defaultChatId
+    );
+
+    if (botHandle) {
+      try {
+        const botData = getTelegramBot(botHandle, options.userConfigPath, options.homeDir);
+        if (botData) {
+          if (!allowedChatIds && botData.allowedChatIds) {
+            allowedChatIds = parseAllowedChatIds(botData.allowedChatIds);
+          }
+          if (!allowedUserIds && (botData.allowedChatIds || botData.allowedUserIds)) {
+            allowedUserIds = parseAllowedUserIds(botData.allowedChatIds || botData.allowedUserIds);
+          }
+          if (
+            defaultChatId === undefined &&
+            (botData.defaultChatId !== undefined || (botData.allowedChatIds && botData.allowedChatIds.length > 0))
+          ) {
+            defaultChatId = parseChatId(botData.defaultChatId ?? botData.allowedChatIds?.[0]);
+          }
+        }
+      } catch {}
+    }
+
+    if (!allowedChatIds && processEnv['TELEGRAM_ALLOWED_CHAT_IDS']) {
+      allowedChatIds = parseAllowedChatIds(processEnv['TELEGRAM_ALLOWED_CHAT_IDS']);
+    }
+    if (!allowedUserIds && processEnv['TELEGRAM_ALLOWED_USER_IDS']) {
+      allowedUserIds = parseAllowedUserIds(processEnv['TELEGRAM_ALLOWED_USER_IDS']);
+    }
+    if (defaultChatId === undefined && processEnv['TELEGRAM_CHAT_ID']) {
+      defaultChatId = parseChatId(processEnv['TELEGRAM_CHAT_ID']);
+    }
+
+    return {
+      bot: botHandle,
+      botHandle,
+      botToken: envOverrideToken,
+      allowedChatIds,
+      allowedUserIds,
+      defaultChatId,
+      source: {
+        botToken: 'env_override',
+        allowedChatIds: allowedChatIds ? 'env_override' : 'none',
+        allowedUserIds: allowedUserIds ? 'env_override' : 'none',
+        defaultChatId: defaultChatId !== undefined ? 'env_override' : 'none',
+      },
+    };
+  }
+
+  // 2. If botHandle is provided, look up in ~/.imagos/config.json
+  if (botHandle) {
+    const botData = getTelegramBot(botHandle, options.userConfigPath, options.homeDir);
+    if (!botData || !botData.token?.trim()) {
+      throw new Error(
+        `Bot handle '${botHandle}' not found in ~/.imagos/config.json. Run 'imagos init' to configure it.`
+      );
+    }
+
+    const botToken = botData.token.trim();
+    const allowedChatIds = parseAllowedChatIds(botData.allowedChatIds);
+    const allowedUserIds = parseAllowedUserIds(botData.allowedChatIds || botData.allowedUserIds);
+    const defaultChatId = parseChatId(
+      botData.defaultChatId ?? (allowedChatIds && allowedChatIds.length > 0 ? allowedChatIds[0] : undefined)
+    );
+
+    return {
+      bot: botHandle,
+      botHandle,
+      botToken,
+      allowedChatIds,
+      allowedUserIds,
+      defaultChatId,
+      source: {
+        botToken: 'user_config',
+        allowedChatIds: allowedChatIds ? 'user_config' : 'none',
+        allowedUserIds: allowedUserIds ? 'user_config' : 'none',
+        defaultChatId: defaultChatId !== undefined ? 'user_config' : 'none',
+      },
+    };
+  }
+
+  // 3. If explicitly enabled via new telegram.enabled schema or strict mode without botHandle
+  if (options.config?.telegram?.enabled || options.strict) {
+    throw new Error(
+      "Telegram is enabled, but no 'telegram.bot' handle is defined in .autopilot/config.json."
+    );
+  }
+
+  // Fallback: Legacy 3-tier resolution
   const botTokenEnvKey = options.config?.remote?.telegram?.botTokenEnv || 'TELEGRAM_BOT_TOKEN';
 
   // 1. Tier 1: Parse local repository .env file
@@ -280,9 +625,6 @@ export function resolveTelegramCredentials(
   const repo = options.repository || options.config?.repository;
   const repoCreds = repo && credentials?.telegram?.repositories ? credentials.telegram.repositories[repo] : undefined;
   const globalCreds = credentials?.telegram;
-
-  // 3. Tier 3: Process environment
-  const processEnv = options.env || process.env;
 
   // Track sources
   let botToken: string | undefined;
@@ -347,7 +689,11 @@ export function resolveTelegramCredentials(
     }
   }
 
-  if (!allowedUserIds && options.config?.remote?.telegram?.allowedUserIds && options.config.remote.telegram.allowedUserIds.length > 0) {
+  if (
+    !allowedUserIds &&
+    options.config?.remote?.telegram?.allowedUserIds &&
+    options.config.remote.telegram.allowedUserIds.length > 0
+  ) {
     allowedUserIds = options.config.remote.telegram.allowedUserIds;
     allowedUserIdsSource = 'config';
   }
@@ -365,7 +711,11 @@ export function resolveTelegramCredentials(
     }
   }
 
-  if (defaultChatId === undefined && globalCreds && (globalCreds.defaultChatId !== undefined || globalCreds.chatId !== undefined)) {
+  if (
+    defaultChatId === undefined &&
+    globalCreds &&
+    (globalCreds.defaultChatId !== undefined || globalCreds.chatId !== undefined)
+  ) {
     const parsed = parseChatId(globalCreds.defaultChatId !== undefined ? globalCreds.defaultChatId : globalCreds.chatId);
     if (parsed !== undefined) {
       defaultChatId = parsed;

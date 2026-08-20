@@ -643,4 +643,41 @@ describe('Configuration file helpers', () => {
       expect(occurrences).toBe(1);
     });
   });
+
+  describe('TelegramRepoConfigSchema & telegram.bot support', () => {
+    it('parses repo config with top-level telegram object and bot handle', () => {
+      const config = AutoPilotConfigSchema.parse({
+        telegram: {
+          enabled: true,
+          bot: '@imagos_backend_bot',
+        },
+      });
+
+      expect(config.telegram).toBeDefined();
+      expect(config.telegram?.enabled).toBe(true);
+      expect(config.telegram?.bot).toBe('@imagos_backend_bot');
+    });
+
+    it('loadConfig syncs top-level telegram config into remote.telegram', async () => {
+      const configFile = path.join(tmpDir, '.autopilot', 'config.json');
+      fs.mkdirSync(path.dirname(configFile), { recursive: true });
+      fs.writeFileSync(
+        configFile,
+        JSON.stringify({
+          repository: 'owner/repo',
+          telegram: {
+            enabled: true,
+            bot: '@imagos_backend_bot',
+          },
+        }),
+        'utf8'
+      );
+
+      const loaded = await loadConfig(undefined, tmpDir);
+      expect(loaded.telegram?.enabled).toBe(true);
+      expect(loaded.telegram?.bot).toBe('@imagos_backend_bot');
+      expect(loaded.remote.enabled).toBe(true);
+      expect(loaded.remote.telegram.bot).toBe('@imagos_backend_bot');
+    });
+  });
 });

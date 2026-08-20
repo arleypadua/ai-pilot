@@ -496,9 +496,12 @@ export function formatHelp(repository: string | undefined, securityInfo: Securit
     '• `/status` - View daemon health, active workers, git branches, and target specs',
     '• `/tasks` - View in-progress, paused, and queued tasks with pause/resume controls',
     '• `/pause [issue]` - Pause global task dispatching or pause a specific worker',
-    '• `/resume [issue]` - Resume global task dispatching or resume a specific worker',
-    '• `/specs [numbers|all]` - View or switch target parent spec scopes',
-    '• `/help` - Show this command reference and security status',
+    '• `/resume [issue]` - Clear rate-limit pause and resume workers',
+    '• `/specs [numbers|all]` - List and switch scoped parent specs',
+    '• `/clean` - Clean inactive worktrees and temp branches',
+    '• `/inspect <issue>` - Inspect active worker tool calls & diffs',
+    '• `/logs <issue>` - View recent daemon logs',
+    '• `/help` - Show command reference and usage',
     '',
     '🔒 *Security Status*:',
     `• *Authorization*: ${securityInfo.isAuthorized ? 'Authorized ✅' : 'Unauthorized ❌'}`,
@@ -507,6 +510,50 @@ export function formatHelp(repository: string | undefined, securityInfo: Securit
   ];
 
   return lines.join('\n');
+}
+
+/**
+ * Formats response for /clean command.
+ */
+export function formatCleanResult(repository: string | undefined, count: number): string {
+  const repoTag = formatRepoTag(repository);
+  if (count === 0) {
+    return `${repoTag}🧹 *Clean Complete*\n\nNo inactive worktrees or temporary branches found to clean.`;
+  }
+  return `${repoTag}🧹 *Clean Complete*\n\nCleaned up ${count} inactive worktree${count === 1 ? '' : 's'} and temporary branch${count === 1 ? '' : 'es'}.`;
+}
+
+/**
+ * Formats response for /inspect command.
+ */
+export function formatInspect(repository: string | undefined, issueNumber: number, details: string): string {
+  const repoTag = formatRepoTag(repository);
+  return `${repoTag}🔍 *Inspection: Issue #${issueNumber}*\n\n${details}`;
+}
+
+/**
+ * Formats usage help for /inspect command.
+ */
+export function formatInspectHelp(repository: string | undefined): string {
+  const repoTag = formatRepoTag(repository);
+  return `${repoTag}🔍 *Inspect Usage*\n\nUse \`/inspect <issueNumber>\` (e.g. \`/inspect 42\`) to inspect active worker tool calls and git diffs.`;
+}
+
+/**
+ * Formats response for /logs command.
+ */
+export function formatLogs(repository: string | undefined, issueNumber: number, logs: string): string {
+  const repoTag = formatRepoTag(repository);
+  const truncated = logs.length > 3000 ? logs.slice(-3000) : logs;
+  return `${repoTag}📜 *Logs: Issue #${issueNumber}*\n\n\`\`\`\n${truncated}\n\`\`\``;
+}
+
+/**
+ * Formats usage help for /logs command.
+ */
+export function formatLogsHelp(repository: string | undefined): string {
+  const repoTag = formatRepoTag(repository);
+  return `${repoTag}📜 *Logs Usage*\n\nUse \`/logs <issueNumber>\` (e.g. \`/logs 42\`) to view recent execution logs for an issue.`;
 }
 
 /**

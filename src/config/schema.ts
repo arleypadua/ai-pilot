@@ -23,12 +23,28 @@ export const TelegramNotificationsConfigSchema = z.object({
   specCompleted: z.boolean().default(true),
 });
 
-export const TelegramRemoteConfigSchema = z.object({
-  botTokenEnv: z.string().default('TELEGRAM_BOT_TOKEN'),
-  allowedUserIds: z.array(z.number().int()).optional(),
-  defaultChatId: z.union([z.number().int(), z.string()]).optional(),
-  notifications: TelegramNotificationsConfigSchema.default({}),
-});
+export const TelegramRepoConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    bot: z.string().optional(),
+    botTokenEnv: z.string().default('TELEGRAM_BOT_TOKEN'),
+    allowedChatIds: z.array(z.union([z.number().int(), z.string()])).optional(),
+    allowedUserIds: z.array(z.number().int()).optional(),
+    defaultChatId: z.union([z.number().int(), z.string()]).optional(),
+    notifications: TelegramNotificationsConfigSchema.default({}),
+  })
+  .passthrough();
+
+export const TelegramRemoteConfigSchema = z
+  .object({
+    bot: z.string().optional(),
+    botTokenEnv: z.string().default('TELEGRAM_BOT_TOKEN'),
+    allowedChatIds: z.array(z.union([z.number().int(), z.string()])).optional(),
+    allowedUserIds: z.array(z.number().int()).optional(),
+    defaultChatId: z.union([z.number().int(), z.string()]).optional(),
+    notifications: TelegramNotificationsConfigSchema.default({}),
+  })
+  .passthrough();
 
 export const RemoteControlConfigSchema = z
   .object({
@@ -60,6 +76,7 @@ export const AutoPilotConfigSchema = z.object({
   autoMerge: z.boolean().default(true),
   mergeMethod: z.enum(['squash', 'merge', 'rebase']).default('squash'),
   cleanupWorktreeOnClose: z.boolean().default(true),
+  telegram: TelegramRepoConfigSchema.optional(),
   remote: RemoteControlConfigSchema.default({}),
   quota: z
     .object({
@@ -144,6 +161,13 @@ export async function loadConfig(
   }
 
   const parsed = AutoPilotConfigSchema.parse(fileConfig);
+
+  if (parsed.telegram?.enabled) {
+    parsed.remote.enabled = true;
+  }
+  if (parsed.telegram?.bot && !parsed.remote.telegram.bot) {
+    parsed.remote.telegram.bot = parsed.telegram.bot;
+  }
 
   if (!parsed.repository) {
     parsed.repository = await detectRepository(cwd);

@@ -40,6 +40,8 @@ export interface RemoteControlProvider {
     handler: (args: string[], userId: number, context?: ActionContext) => Promise<void>
   ): void;
   getAllowedUserIds?(): number[] | undefined;
+  getAllowedChatIds?(): (number | string)[] | undefined;
+  registerCommands?(): Promise<void>;
 }
 
 export interface TaskItemSummary {
@@ -114,6 +116,9 @@ export interface RemoteActionController {
   getStatusSummary(): unknown;
   getTasksSummary?(): TasksSummary;
   getSpecsSummary?(): SpecsSummary;
+  cleanWorktrees?(): Promise<{ success: boolean; message: string; count?: number }>;
+  getInspectSummary?(issueNumber?: number): Promise<string>;
+  getLogsSummary?(issueNumber: number, tailLines?: number): Promise<string>;
 }
 
 export interface TaskStartedNotificationPayload {
@@ -172,6 +177,8 @@ export interface QuotaResumedNotificationPayload {
 
 export interface TelegramRemoteProviderOptions {
   botToken?: string;
+  botHandle?: string;
+  allowedChatIds?: (number | string)[];
   allowedUserIds?: number[];
   defaultChatId?: number | string;
   rateLimiter?: TelegramRateLimiter;
