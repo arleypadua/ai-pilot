@@ -16,6 +16,28 @@ export const RunnerConfigSchema = z
   })
   .passthrough();
 
+export const TelegramNotificationsConfigSchema = z.object({
+  needsInfo: z.boolean().default(true),
+  quotaPaused: z.boolean().default(true),
+  taskCompleted: z.boolean().default(true),
+  specCompleted: z.boolean().default(true),
+});
+
+export const TelegramRemoteConfigSchema = z.object({
+  botTokenEnv: z.string().default('TELEGRAM_BOT_TOKEN'),
+  allowedUserIds: z.array(z.number().int()).optional(),
+  defaultChatId: z.union([z.number().int(), z.string()]).optional(),
+  notifications: TelegramNotificationsConfigSchema.default({}),
+});
+
+export const RemoteControlConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    provider: z.enum(['telegram', 'slack', 'discord']).default('telegram'),
+    telegram: TelegramRemoteConfigSchema.default({}),
+  })
+  .default({});
+
 export const AutoPilotConfigSchema = z.object({
   repository: z
     .string()
@@ -34,6 +56,7 @@ export const AutoPilotConfigSchema = z.object({
   autoMerge: z.boolean().default(true),
   mergeMethod: z.enum(['squash', 'merge', 'rebase']).default('squash'),
   cleanupWorktreeOnClose: z.boolean().default(true),
+  remote: RemoteControlConfigSchema.default({}),
   quota: z
     .object({
       pauseOnLimit: z.boolean().default(true),
@@ -52,6 +75,8 @@ export const AutoPilotConfigSchema = z.object({
     })
     .default({}),
 });
+
+export * from './credentials.js';
 
 export const DEFAULT_CONFIG: AutoPilotConfig = AutoPilotConfigSchema.parse({});
 

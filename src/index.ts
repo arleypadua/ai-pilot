@@ -1,5 +1,6 @@
 export * from './types/index.js';
 export * from './config/schema.js';
+export * from './config/credentials.js';
 export * from './github/client.js';
 export * from './github/parser.js';
 export * from './github/dag.js';
