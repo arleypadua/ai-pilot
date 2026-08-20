@@ -91,12 +91,13 @@ export interface TaskContext {
 
 export interface RunnerResult {
   success: boolean;
-  status: 'COMPLETED' | 'NEEDS_INFO' | 'QUOTA_PAUSED' | 'FAILED' | 'INTERRUPTED_FOR_PROMPT';
+  status: 'COMPLETED' | 'NEEDS_INFO' | 'QUOTA_PAUSED' | 'FAILED' | 'TIMED_OUT' | 'INTERRUPTED_FOR_PROMPT';
   summary?: string;
   feedbackQuestion?: string;
   error?: string;
   quotaResetAt?: Date;
   injectedPrompt?: string;
+  isTimeout?: boolean;
 }
 
 export interface AgyConfig {
@@ -200,6 +201,8 @@ export interface AutoPilotConfig {
   baseBranch: string;
   maxConcurrency: number;
   maxAutoNudges?: number;
+  maxRetriesOnFailure?: number;
+  maxAutoRetries?: number;
   pollIntervalSeconds: number;
   extraPrompt?: string;
   runner: string;

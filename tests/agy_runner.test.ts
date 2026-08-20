@@ -117,4 +117,13 @@ describe('AgyRunner', () => {
     expect(promptNoAuto).toContain('leave the Pull Request open for developer review and merge (do not auto-merge)');
     expect(promptNoAuto).not.toContain('gh pr merge --merge');
   });
+
+  it('should support AgyRunnerConfig with printTimeout and model', () => {
+    const runner = new AgyRunner(undefined, {
+      model: 'gemini-3.7-flash',
+      effort: 'high',
+      printTimeout: '15m',
+    });
+    expect(runner.name).toBe('agy');
+  });
 });

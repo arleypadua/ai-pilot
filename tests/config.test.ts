@@ -27,6 +27,7 @@ describe('AutoPilotConfigSchema', () => {
       expect(config.baseBranch).toBe('main');
       expect(config.maxConcurrency).toBe(2);
       expect(config.maxAutoNudges).toBe(2);
+      expect(config.maxRetriesOnFailure).toBe(2);
       expect(config.pollIntervalSeconds).toBe(30);
       expect(config.runner).toBe('claude');
       expect(config.autoMerge).toBe(true);
@@ -135,6 +136,14 @@ describe('AutoPilotConfigSchema', () => {
         proxyPort: 8080,
       });
       expect(result.labels).toEqual(custom.labels);
+    });
+
+    it('accepts maxRetriesOnFailure and maxAutoRetries options', () => {
+      const config1 = AutoPilotConfigSchema.parse({ maxRetriesOnFailure: 5 });
+      expect(config1.maxRetriesOnFailure).toBe(5);
+
+      const config2 = AutoPilotConfigSchema.parse({ maxAutoRetries: 3 });
+      expect(config2.maxAutoRetries).toBe(3);
     });
 
     it('accepts targetSpec as array of integers and targetSpecs', () => {

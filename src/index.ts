@@ -15,3 +15,4 @@ export * from './notifications/notifier.js';
 export * from './pipeline/orchestrator.js';
 export * from './ui/dashboard.js';
 export * from './state/manager.js';
+export * from './remote/index.js';

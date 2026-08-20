@@ -333,6 +333,19 @@ ${guidelines}
         }
       }
 
+      if (
+        /timeout waiting for response/i.test(fullOutput) ||
+        /timed?\s*out waiting/i.test(fullOutput)
+      ) {
+        return {
+          success: false,
+          status: 'TIMED_OUT',
+          isTimeout: true,
+          error: 'Execution timed out waiting for response',
+          summary: fullOutput.slice(-1000),
+        };
+      }
+
       return {
         success: true,
         status: 'COMPLETED',
@@ -362,6 +375,24 @@ ${guidelines}
             summary: 'Execution paused due to Claude quota limits.',
           };
         }
+      }
+
+      const isTimeout =
+        err.timedOut === true ||
+        /timeout waiting for response/i.test(err.message || '') ||
+        /timeout waiting for response/i.test(fullOutput) ||
+        /timed?\s*out/i.test(err.message || '') ||
+        /timed?\s*out/i.test(fullOutput) ||
+        err.code === 'ETIMEDOUT';
+
+      if (isTimeout) {
+        return {
+          success: false,
+          status: 'TIMED_OUT',
+          isTimeout: true,
+          error: err.message || String(err),
+          summary: fullOutput.slice(-1000) || 'Execution timed out waiting for response',
+        };
       }
 
       return {

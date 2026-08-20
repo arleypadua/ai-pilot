@@ -10,6 +10,9 @@ import { Notifier } from '../notifications/notifier.js';
 import { Dashboard } from '../ui/dashboard.js';
 import { StateManager } from '../state/manager.js';
 import { AgentEventBus } from '../events/bus.js';
+import { resolveTelegramCredentials } from '../config/credentials.js';
+import { TelegramRemoteProvider } from '../remote/telegram.js';
+import { RemoteControlManager } from '../remote/manager.js';
 
 export class Orchestrator {
   private config: AutoPilotConfig;
@@ -21,6 +24,7 @@ export class Orchestrator {
   private dashboard: Dashboard;
   private stateMgr: StateManager;
   private eventBus = AgentEventBus.getInstance();
+  private remoteManager?: RemoteControlManager;
 
   private isRunning: boolean = false;
   private isInteractive: boolean = false;
@@ -46,6 +50,32 @@ export class Orchestrator {
     this.dashboard = new Dashboard(config);
     this.stateMgr = new StateManager();
 
+    // Setup remote control if enabled
+    if (this.config.remote?.enabled) {
+      try {
+        const creds = resolveTelegramCredentials({
+          config: this.config,
+          repository: this.config.repository,
+        });
+        if (creds.botToken) {
+          const provider = new TelegramRemoteProvider({
+            botToken: creds.botToken,
+            allowedUserIds: creds.allowedUserIds,
+            defaultChatId: creds.defaultChatId,
+          });
+          this.remoteManager = new RemoteControlManager({
+            provider,
+            repository: this.config.repository,
+            defaultChatId: creds.defaultChatId,
+            notifications: this.config.remote.telegram.notifications,
+            eventBus: this.eventBus,
+          });
+        }
+      } catch (err: any) {
+        this.dashboard.log(`Failed to initialize remote control provider: ${err.message}`);
+      }
+    }
+
     // Auto-starts by default (either scoped to specs or resolving to any unblocked task)
     this.isSessionStarted = true;
 
@@ -59,9 +89,11 @@ export class Orchestrator {
 
     this.quotaMonitor.on('quota_resumed', () => {
       this.stateMgr.updateDaemonStatus('running');
+      Notifier.notifyQuotaResumed();
       this.dashboard.log('Quota reset window reached. Resuming workers.');
     });
   }
+
 
   public setInteractive(interactive: boolean): void {
     this.isInteractive = interactive;
@@ -103,6 +135,15 @@ export class Orchestrator {
     this.isRunning = true;
     this.stateMgr.updateDaemonStatus('running');
 
+    if (this.remoteManager) {
+      try {
+        await this.remoteManager.start();
+        this.dashboard.log('Remote control bot started.');
+      } catch (err: any) {
+        this.dashboard.log(`Remote control bot start warning: ${err.message}`);
+      }
+    }
+
     const targetSpecs = this.dag.getTargetSpecs();
     if (targetSpecs.length > 0) {
       this.dashboard.log(`Agent Auto-Pilot started (scoped to Spec(s): ${targetSpecs.map((s) => `#${s}`).join(', ')})`);
@@ -139,8 +180,16 @@ export class Orchestrator {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
     }
+    if (this.remoteManager) {
+      this.remoteManager.stop().catch(() => {});
+    }
     this.dashboard.log('Agent Auto-Pilot stopped.');
   }
+
+  public getRemoteManager(): RemoteControlManager | undefined {
+    return this.remoteManager;
+  }
+
 
   public async tick(): Promise<void> {
     // 0. Fetch live Claude usage telemetry (/usage)
@@ -296,7 +345,8 @@ export class Orchestrator {
   private async executeTask(
     node: DAGNode,
     overrideFeedback?: string,
-    autoNudgeCount: number = 0
+    autoNudgeCount: number = 0,
+    failureRetryCount: number = 0
   ): Promise<void> {
     const { issue } = node;
     const isContinuation = await this.worktreeMgr.worktreeExists(issue.number);
@@ -333,6 +383,15 @@ export class Orchestrator {
         branchName,
         status: 'running',
         startedAt: new Date(),
+      });
+
+      Notifier.notifyTaskStarted({
+        issueNumber: issue.number,
+        issueTitle: issue.title,
+        runnerName,
+        branchName,
+        sessionId: session.sessionId,
+        isContinuation,
       });
 
       // 2. Post Start/Resume Comment to GitHub Issue
@@ -487,7 +546,7 @@ export class Orchestrator {
             await this.gh.closeIssue(issue.number, `Closed via automated merge of PR #${pr.number}`);
             this.stateMgr.finishTaskSession(issue.number, 'completed', { prUrl: pr.url, prNumber: pr.number });
             this.dashboard.log(`Issue #${issue.number} completed and merged via PR #${pr.number}.`);
-            Notifier.notifyTaskMerged(issue.number, issue.title);
+            Notifier.notifyTaskMerged(issue.number, issue.title, pr.url, pr.number, this.config.baseBranch);
 
             if (this.config.cleanupWorktreeOnClose) {
               await this.worktreeMgr.cleanupWorktree(issue.number, issue.title, true);
@@ -519,7 +578,7 @@ export class Orchestrator {
             prNumber: pr.number,
           });
           this.dashboard.log(`Issue #${issue.number} marked ready-for-human (PR #${pr.number}).`);
-          Notifier.notifyNeedsFeedback(issue.number, issue.title, `PR #${pr.number} ready for review`);
+          Notifier.notifyNeedsFeedback(issue.number, issue.title, `PR #${pr.number} ready for review`, pr.url, pr.number);
           return;
         }
 
@@ -555,7 +614,7 @@ ${autoMergeStep}
             `Auto-nudging agent to finalize PR (attempt ${autoNudgeCount + 1}/${maxNudges})`
           );
 
-          return this.executeTask(node, nudgePrompt, autoNudgeCount + 1);
+          return this.executeTask(node, nudgePrompt, autoNudgeCount + 1, failureRetryCount);
         }
 
         // Exhausted auto-nudges without PR or feedback request
@@ -576,13 +635,145 @@ ${autoMergeStep}
         this.dashboard.log(`Issue #${issue.number} marked ready-for-human (no PR opened after ${maxNudges} nudges).`);
         Notifier.notifyNeedsFeedback(issue.number, issue.title, 'Agent finished execution without opening a PR');
         return;
-      } else {
-        this.stateMgr.finishTaskSession(issue.number, 'failed', { error: runnerRes.error });
-        this.dashboard.log(`Agent exited with error on Issue #${issue.number}: ${runnerRes.error || 'Unknown'}`);
       }
+
+      // Case D: Runner turn timed out (Solution 1: Auto-Resume on Timeout)
+      if (runnerRes.status === 'TIMED_OUT' || runnerRes.isTimeout) {
+        const maxNudges = this.config.maxAutoNudges ?? 2;
+        if (autoNudgeCount < maxNudges) {
+          this.dashboard.log(
+            `Issue #${issue.number}: Agent turn timed out. Automatically resuming task with continuation prompt (attempt ${autoNudgeCount + 1}/${maxNudges})...`
+          );
+
+          const mergeMethod = this.config.mergeMethod || 'squash';
+          const autoMergeStep = this.config.autoMerge
+            ? `4. Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
+            : `4. Keep the Pull Request open for human review (do not auto-merge).`;
+
+          const timeoutPrompt = `Your previous execution turn timed out while running.
+
+Please inspect the existing worktree to see what was already implemented, avoid repeating already-completed work or tests, and continue implementation to completion:
+1. Review modified files and current progress in the worktree.
+2. Complete any remaining acceptance criteria and write/run tests.
+3. Commit all changes: \`git add -A && git commit -m "..."\`
+4. Push your branch to remote: \`git push -u origin ${branchName}\`
+5. Open a Pull Request: \`gh pr create --title "${issue.title.replace(/"/g, '\\"')}" --body "Closes #${issue.number}"\`
+${autoMergeStep}
+6. If blocked or clarification is needed, comment on the issue and label \`ready-for-human\`.`;
+
+          this.stateMgr.recordTaskStage(
+            issue.number,
+            'AUTO_RESUME_TIMEOUT',
+            'running',
+            `Auto-resuming timed-out agent turn (attempt ${autoNudgeCount + 1}/${maxNudges})`
+          );
+
+          return this.executeTask(node, timeoutPrompt, autoNudgeCount + 1, failureRetryCount);
+        }
+
+        // Exhausted timeout auto-resumes
+        try {
+          await this.gh.editIssueLabels(issue.number, {
+            add: [this.config.labels.readyForHuman],
+            remove: [this.config.labels.readyForAgent],
+          });
+          await this.gh.addComment(
+            issue.number,
+            `⚠️ **Agent Execution Timed Out**\n\nThe agent turn timed out after ${maxNudges} follow-up continuation attempts.\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
+          );
+        } catch {
+          // Best effort
+        }
+
+        this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
+        this.dashboard.log(`Issue #${issue.number} marked ready-for-human (timed out after ${maxNudges} attempts).`);
+        Notifier.notifyNeedsFeedback(issue.number, issue.title, `Agent timed out after ${maxNudges} attempts`);
+        return;
+      }
+
+      // Case E: Runner failed / error (Solution 3: Transient Failure Retry Policy)
+      const maxRetries = this.config.maxRetriesOnFailure ?? this.config.maxAutoRetries ?? 2;
+      if (failureRetryCount < maxRetries) {
+        this.dashboard.log(
+          `Issue #${issue.number}: Runner exited with error (${runnerRes.error || 'Unknown'}). Automatically retrying (attempt ${failureRetryCount + 1}/${maxRetries})...`
+        );
+
+        const mergeMethod = this.config.mergeMethod || 'squash';
+        const autoMergeStep = this.config.autoMerge
+          ? `4. Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
+          : `4. Keep the Pull Request open for human review (do not auto-merge).`;
+
+        const retryPrompt = `Your previous execution turn encountered an error:
+${runnerRes.error || 'Unknown error'}
+
+Please inspect the current worktree and git status, resolve the issue, and continue implementation:
+1. Check existing changes, build errors, or test failures.
+2. Complete implementation and verify all tests pass.
+3. Commit and push: \`git add -A && git commit -m "..." && git push -u origin ${branchName}\`
+4. Open a Pull Request: \`gh pr create --title "${issue.title.replace(/"/g, '\\"')}" --body "Closes #${issue.number}"\`
+${autoMergeStep}
+5. If blocked or unable to resolve, explain in an issue comment and label \`ready-for-human\`.`;
+
+        this.stateMgr.recordTaskStage(
+          issue.number,
+          'AUTO_RETRY_FAILURE',
+          'running',
+          `Auto-retrying failed task (attempt ${failureRetryCount + 1}/${maxRetries}): ${(runnerRes.error || '').slice(0, 80)}`
+        );
+
+        return this.executeTask(node, retryPrompt, autoNudgeCount, failureRetryCount + 1);
+      }
+
+      // Exhausted retries on failure
+      try {
+        await this.gh.editIssueLabels(issue.number, {
+          add: [this.config.labels.readyForHuman],
+          remove: [this.config.labels.readyForAgent],
+        });
+        await this.gh.addComment(
+          issue.number,
+          `⚠️ **Agent Failed After ${maxRetries} Retries**\n\nThe agent failed with the following error after ${maxRetries} retry attempts:\n\n\`\`\`\n${runnerRes.error || 'Unknown error'}\n\`\`\`\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
+        );
+      } catch {
+        // Best effort
+      }
+
+      this.stateMgr.finishTaskSession(issue.number, 'failed', { error: runnerRes.error });
+      this.dashboard.log(`Agent failed on Issue #${issue.number} after ${maxRetries} retries: ${runnerRes.error || 'Unknown'}`);
+      Notifier.notifyNeedsFeedback(issue.number, issue.title, `Agent failed after ${maxRetries} retries`);
+      return;
     } catch (err: any) {
+      const maxRetries = this.config.maxRetriesOnFailure ?? this.config.maxAutoRetries ?? 2;
+      if (failureRetryCount < maxRetries) {
+        this.dashboard.log(
+          `Issue #${issue.number}: Task exception: ${err.message}. Automatically retrying (attempt ${failureRetryCount + 1}/${maxRetries})...`
+        );
+        this.stateMgr.recordTaskStage(
+          issue.number,
+          'AUTO_RETRY_FAILURE',
+          'running',
+          `Auto-retrying task exception (attempt ${failureRetryCount + 1}/${maxRetries}): ${err.message.slice(0, 80)}`
+        );
+        const retryPrompt = `Your previous execution turn failed with exception: ${err.message}.\n\nPlease inspect the worktree, resolve any errors, and finish the task.`;
+        return this.executeTask(node, retryPrompt, autoNudgeCount, failureRetryCount + 1);
+      }
+
+      try {
+        await this.gh.editIssueLabels(issue.number, {
+          add: [this.config.labels.readyForHuman],
+          remove: [this.config.labels.readyForAgent],
+        });
+        await this.gh.addComment(
+          issue.number,
+          `⚠️ **Task Error After ${maxRetries} Retries**\n\n\`\`\`\n${err.message}\n\`\`\`\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
+        );
+      } catch {
+        // Best effort
+      }
+
       this.stateMgr.finishTaskSession(issue.number, 'failed', { error: err.message });
       this.dashboard.log(`Task #${issue.number} error: ${err.message}`);
+      Notifier.notifyNeedsFeedback(issue.number, issue.title, `Task error: ${err.message}`);
     }
   }
 
