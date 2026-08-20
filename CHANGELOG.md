@@ -1,5 +1,11 @@
 # imagos
 
+## 0.5.0
+
+### Minor Changes
+
+- 3818766: feat: extensible Telegram remote control integration including interactive setup wizard (`imagos init`), runtime toggle flags (`imagos start --remote` / `--no-remote`), graceful shutdown on process signals (`SIGINT`/`SIGTERM`), slash command controls, interactive needs-info steering, one-tap quota resumption alerts, and outbound milestone notifications.
+
 ## 0.4.0
 
 ### Minor Changes
