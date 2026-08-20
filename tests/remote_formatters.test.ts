@@ -6,11 +6,13 @@ import {
   formatTaskCompleted,
   formatSpecCompleted,
   formatNeedsInfo,
+  formatNeedsInfoAnswered,
   formatQuotaPaused,
   formatQuotaResumed,
   formatQuotaResumedByDeveloper,
   buildQuotaResumeCallbackData,
   parseQuotaActionPayload,
+  parseQuestionChoices,
 } from '../src/remote/formatters.js';
 
 describe('Remote Message Formatters', () => {
@@ -108,6 +110,83 @@ describe('Remote Message Formatters', () => {
       expect(msg).toContain('[owner/repo] ❓ *Feedback Needed*: #24 - *feat: notifications*');
       expect(msg).toContain('*Question*:\nShould we enable auto-retry?');
       expect(msg).toContain('• *Pull Request*: [PR #30](https://github.com/owner/repo/pull/30)');
+    });
+  });
+
+  describe('parseQuestionChoices', () => {
+    it('parses numbered choices (1. / 2.)', () => {
+      const q = `Which auth method should we use?
+1. JWT Authentication
+2. Session Cookies
+3. OAuth 2.0`;
+      const choices = parseQuestionChoices(q);
+      expect(choices).toEqual(['JWT Authentication', 'Session Cookies', 'OAuth 2.0']);
+    });
+
+    it('parses numbered choices with parentheses or brackets (1) / [1])', () => {
+      const q1 = `Select database:\n(1) SQLite\n(2) PostgreSQL`;
+      expect(parseQuestionChoices(q1)).toEqual(['SQLite', 'PostgreSQL']);
+
+      const q2 = `Select engine:\n[1] Docker\n[2] Podman`;
+      expect(parseQuestionChoices(q2)).toEqual(['Docker', 'Podman']);
+    });
+
+    it('parses lettered choices (A. / B. / a) / b))', () => {
+      const q1 = `Choose option:\nA. Enable cache\nB. Disable cache`;
+      expect(parseQuestionChoices(q1)).toEqual(['Enable cache', 'Disable cache']);
+
+      const q2 = `Choose option:\na) Fast mode\nb) Safe mode`;
+      expect(parseQuestionChoices(q2)).toEqual(['Fast mode', 'Safe mode']);
+    });
+
+    it('parses explicit Option / Choice prefix', () => {
+      const q = `Options:\nOption 1: Use Redis\nOption 2: Use Memory`;
+      expect(parseQuestionChoices(q)).toEqual(['Use Redis', 'Use Memory']);
+    });
+
+    it('parses bullet choices (- / * / •)', () => {
+      const q = `Should we proceed?\n- Yes, merge now\n- No, wait for tests`;
+      expect(parseQuestionChoices(q)).toEqual(['Yes, merge now', 'No, wait for tests']);
+    });
+
+    it('returns empty array when no choices are present', () => {
+      expect(parseQuestionChoices('What is the API key?')).toEqual([]);
+      expect(parseQuestionChoices('')).toEqual([]);
+      expect(parseQuestionChoices(undefined)).toEqual([]);
+    });
+  });
+
+  describe('formatNeedsInfoAnswered', () => {
+    it('formats answered feedback notification for button click', () => {
+      const msg = formatNeedsInfoAnswered(
+        'owner/repo',
+        {
+          issueNumber: 26,
+          issueTitle: 'feat: needs-info replies',
+          question: 'Which runner?',
+        },
+        'agy',
+        'button'
+      );
+
+      expect(msg).toContain('[owner/repo] ❓ *Feedback Needed*: #26');
+      expect(msg).toContain('*Question*:\nWhich runner?');
+      expect(msg).toContain('✅ *Answered* (via button): agy');
+    });
+
+    it('formats answered feedback notification for text reply', () => {
+      const msg = formatNeedsInfoAnswered(
+        'owner/repo',
+        {
+          issueNumber: 26,
+          issueTitle: 'feat: needs-info replies',
+          question: 'Which database?',
+        },
+        'Use PostgreSQL 16',
+        'text'
+      );
+
+      expect(msg).toContain('✅ *Answered* (via text): Use PostgreSQL 16');
     });
   });
 

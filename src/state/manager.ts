@@ -105,6 +105,10 @@ export class StateManager {
     this.saveState(state);
   }
 
+  public getDaemonStatus(): 'idle' | 'running' | 'paused_quota' {
+    return this.getState().daemonStatus;
+  }
+
   public startTaskSession(metadata: {
     issueNumber: number;
     title: string;

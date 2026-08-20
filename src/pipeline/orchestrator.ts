@@ -87,13 +87,15 @@ export class Orchestrator implements RemoteActionController {
       const waitMinutes = Math.ceil(waitMs / (60 * 1000));
       this.stateMgr.updateDaemonStatus('paused_quota', resetAt.toISOString());
       Notifier.notifyQuotaPaused(resetAt, waitMinutes, runnerName);
-      this.dashboard.log(`5h Quota limit hit. Suspended workers until ${resetAt.toLocaleTimeString()}`);
+      const runnerStr = runnerName ? ` [${runnerName}]` : '';
+      this.dashboard.log(`5h Quota limit hit${runnerStr}. Suspended workers until ${resetAt.toLocaleTimeString()}`);
     });
 
     this.quotaMonitor.on('quota_resumed', ({ runnerName }) => {
       this.stateMgr.updateDaemonStatus('running');
       Notifier.notifyQuotaResumed(runnerName);
-      this.dashboard.log('Quota reset window reached. Resuming workers.');
+      const runnerStr = runnerName ? ` for ${runnerName}` : '';
+      this.dashboard.log(`Quota reset window reached. Resuming workers${runnerStr}.`);
     });
   }
 
@@ -195,7 +197,7 @@ export class Orchestrator implements RemoteActionController {
 
 
   public async tick(): Promise<void> {
-    // 0. Fetch live Claude usage telemetry (/usage)
+    // 0. Fetch live Claude telemetry (/usage)
     await this.quotaMonitor.fetchLiveUsage();
 
     // 1. Fetch latest issues
@@ -272,7 +274,7 @@ export class Orchestrator implements RemoteActionController {
 
       if (rawQuestion && rawQuestion !== prevComment) {
         this.lastKnownFeedbackQuestions.set(issue.number, rawQuestion);
-        Notifier.notifyNeedsFeedback(issue.number, issue.title, rawQuestion);
+        Notifier.notifyNeedsFeedback(issue.number, issue.title, rawQuestion, undefined, undefined, issue.url);
         this.dashboard.log(`Notification sent for Issue #${issue.number} (needs info)`);
       }
     }
@@ -301,6 +303,7 @@ export class Orchestrator implements RemoteActionController {
 
     for (const node of tasksToDispatch) {
       this.activeTaskNumbers.add(node.issue.number);
+
       // Run asynchronously in background
       this.executeTask(node, undefined, 0).finally(() => {
         this.activeTaskNumbers.delete(node.issue.number);
@@ -581,7 +584,7 @@ export class Orchestrator implements RemoteActionController {
             prNumber: pr.number,
           });
           this.dashboard.log(`Issue #${issue.number} marked ready-for-human (PR #${pr.number}).`);
-          Notifier.notifyNeedsFeedback(issue.number, issue.title, `PR #${pr.number} ready for review`, pr.url, pr.number);
+          Notifier.notifyNeedsFeedback(issue.number, issue.title, `PR #${pr.number} ready for review`, pr.url, pr.number, issue.url);
           return;
         }
 
@@ -636,24 +639,23 @@ ${autoMergeStep}
 
         this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
         this.dashboard.log(`Issue #${issue.number} marked ready-for-human (no PR opened after ${maxNudges} nudges).`);
-        Notifier.notifyNeedsFeedback(issue.number, issue.title, 'Agent finished execution without opening a PR');
+        Notifier.notifyNeedsFeedback(issue.number, issue.title, 'Agent finished execution without opening a PR', undefined, undefined, issue.url);
         return;
       }
 
       // Case D: Runner turn timed out (Solution 1: Auto-Resume on Timeout)
-      if (runnerRes.status === 'TIMED_OUT' || runnerRes.isTimeout) {
-        const maxNudges = this.config.maxAutoNudges ?? 2;
-        if (autoNudgeCount < maxNudges) {
-          this.dashboard.log(
-            `Issue #${issue.number}: Agent turn timed out. Automatically resuming task with continuation prompt (attempt ${autoNudgeCount + 1}/${maxNudges})...`
-          );
+      const maxNudges = this.config.maxAutoNudges ?? 2;
+      if (autoNudgeCount < maxNudges) {
+        this.dashboard.log(
+          `Issue #${issue.number}: Agent turn timed out. Automatically resuming task with continuation prompt (attempt ${autoNudgeCount + 1}/${maxNudges})...`
+        );
 
-          const mergeMethod = this.config.mergeMethod || 'squash';
-          const autoMergeStep = this.config.autoMerge
-            ? `4. Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
-            : `4. Keep the Pull Request open for human review (do not auto-merge).`;
+        const mergeMethod = this.config.mergeMethod || 'squash';
+        const autoMergeStep = this.config.autoMerge
+          ? `4. Once all tests and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
+          : `4. Keep the Pull Request open for human review (do not auto-merge).`;
 
-          const timeoutPrompt = `Your previous execution turn timed out while running.
+        const timeoutPrompt = `Your previous execution turn timed out while running.
 
 Please inspect the existing worktree to see what was already implemented, avoid repeating already-completed work or tests, and continue implementation to completion:
 1. Review modified files and current progress in the worktree.
@@ -664,35 +666,34 @@ Please inspect the existing worktree to see what was already implemented, avoid 
 ${autoMergeStep}
 6. If blocked or clarification is needed, comment on the issue and label \`ready-for-human\`.`;
 
-          this.stateMgr.recordTaskStage(
-            issue.number,
-            'AUTO_RESUME_TIMEOUT',
-            'running',
-            `Auto-resuming timed-out agent turn (attempt ${autoNudgeCount + 1}/${maxNudges})`
-          );
+        this.stateMgr.recordTaskStage(
+          issue.number,
+          'AUTO_RESUME_TIMEOUT',
+          'running',
+          `Auto-resuming timed-out agent turn (attempt ${autoNudgeCount + 1}/${maxNudges})`
+        );
 
-          return this.executeTask(node, timeoutPrompt, autoNudgeCount + 1, failureRetryCount);
-        }
-
-        // Exhausted timeout auto-resumes
-        try {
-          await this.gh.editIssueLabels(issue.number, {
-            add: [this.config.labels.readyForHuman],
-            remove: [this.config.labels.readyForAgent],
-          });
-          await this.gh.addComment(
-            issue.number,
-            `⚠️ **Agent Execution Timed Out**\n\nThe agent turn timed out after ${maxNudges} follow-up continuation attempts.\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
-          );
-        } catch {
-          // Best effort
-        }
-
-        this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
-        this.dashboard.log(`Issue #${issue.number} marked ready-for-human (timed out after ${maxNudges} attempts).`);
-        Notifier.notifyNeedsFeedback(issue.number, issue.title, `Agent timed out after ${maxNudges} attempts`);
-        return;
+        return this.executeTask(node, timeoutPrompt, autoNudgeCount + 1, failureRetryCount);
       }
+
+      // Exhausted timeout auto-resumes
+      try {
+        await this.gh.editIssueLabels(issue.number, {
+          add: [this.config.labels.readyForHuman],
+          remove: [this.config.labels.readyForAgent],
+        });
+        await this.gh.addComment(
+          issue.number,
+          `⚠️ **Agent Execution Timed Out**\n\nThe agent turn timed out after ${maxNudges} follow-up continuation attempts.\n\n*Marked \`${this.config.labels.readyForHuman}\` for manual developer review.*`
+        );
+      } catch {
+        // Best effort
+      }
+
+      this.stateMgr.finishTaskSession(issue.number, 'waiting_feedback');
+      this.dashboard.log(`Issue #${issue.number} marked ready-for-human (timed out after ${maxNudges} attempts).`);
+      Notifier.notifyNeedsFeedback(issue.number, issue.title, `Agent timed out after ${maxNudges} attempts`, undefined, undefined, issue.url);
+      return;
 
       // Case E: Runner failed / error (Solution 3: Transient Failure Retry Policy)
       const maxRetries = this.config.maxRetriesOnFailure ?? this.config.maxAutoRetries ?? 2;
@@ -743,7 +744,7 @@ ${autoMergeStep}
 
       this.stateMgr.finishTaskSession(issue.number, 'failed', { error: runnerRes.error });
       this.dashboard.log(`Agent failed on Issue #${issue.number} after ${maxRetries} retries: ${runnerRes.error || 'Unknown'}`);
-      Notifier.notifyNeedsFeedback(issue.number, issue.title, `Agent failed after ${maxRetries} retries`);
+      Notifier.notifyNeedsFeedback(issue.number, issue.title, `Agent failed after ${maxRetries} retries`, undefined, undefined, issue.url);
       return;
     } catch (err: any) {
       const maxRetries = this.config.maxRetriesOnFailure ?? this.config.maxAutoRetries ?? 2;
@@ -776,7 +777,7 @@ ${autoMergeStep}
 
       this.stateMgr.finishTaskSession(issue.number, 'failed', { error: err.message });
       this.dashboard.log(`Task #${issue.number} error: ${err.message}`);
-      Notifier.notifyNeedsFeedback(issue.number, issue.title, `Task error: ${err.message}`);
+      Notifier.notifyNeedsFeedback(issue.number, issue.title, `Task error: ${err.message}`, undefined, undefined, issue.url);
     }
   }
 
@@ -902,6 +903,33 @@ ${autoMergeStep}
     }
   }
 
+  public async replyToNeedsInfo(issueNumber: number, answer: string): Promise<void> {
+    const commentBody = `💬 **Developer Response** (via Telegram):\n\n${answer}`;
+    try {
+      await this.gh.addComment(issueNumber, commentBody);
+      await this.gh.editIssueLabels(issueNumber, {
+        add: [this.config.labels.readyForAgent],
+        remove: [this.config.labels.readyForHuman, this.config.labels.needsInfo],
+      });
+    } catch (err: any) {
+      this.dashboard.log(`Failed to update GitHub issue #${issueNumber} on reply: ${err.message}`);
+    }
+
+    const node = this.dag.getNode(issueNumber);
+    if (node) {
+      node.status = 'ready';
+      if (node.issue.labels) {
+        node.issue.labels = node.issue.labels.filter(
+          (l) => l.name !== this.config.labels.needsInfo && l.name !== this.config.labels.readyForHuman
+        );
+        node.issue.labels.push({ name: this.config.labels.readyForAgent });
+      }
+    }
+
+    await this.injectPrompt(issueNumber, answer);
+    this.tick().catch(() => {});
+  }
+
   public resumeQuota(runner?: string): void {
     this.quotaMonitor.resumeFromQuota(runner);
     this.stateMgr.updateDaemonStatus('running');
@@ -917,16 +945,12 @@ ${autoMergeStep}
     await this.resumeWorker(issueNumber);
   }
 
-  public async replyToNeedsInfo(issueNumber: number, answer: string): Promise<void> {
-    await this.injectPrompt(issueNumber, answer);
-  }
-
   public getStatusSummary(): unknown {
     return {
-      daemonStatus: this.stateMgr.getState().daemonStatus,
+      status: this.stateMgr.getDaemonStatus(),
       activeTasks: Array.from(this.activeTaskNumbers),
       targetSpecs: this.dag.getTargetSpecs(),
-      quota: this.quotaMonitor.getStatus(),
+      workers: Array.from(this.dashboard.getActiveWorkers().values()),
     };
   }
 }

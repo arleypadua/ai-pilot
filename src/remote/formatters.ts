@@ -84,6 +84,83 @@ export function formatSpecCompleted(
 }
 
 /**
+ * Parses multiple-choice options from a question string.
+ * Supports:
+ * - Numbered lists: 1. Option, 2. Option or 1) Option, 2) Option or (1) Option or [1] Option
+ * - Lettered lists: A. Option, B. Option or A) Option, B) Option or (A) Option or [A] Option
+ * - Explicit choice prefixes: Option 1: ..., Choice A: ...
+ * - Bullet lists: - Option, * Option, • Option
+ */
+export function parseQuestionChoices(questionText?: string): string[] {
+  if (!questionText || typeof questionText !== 'string') {
+    return [];
+  }
+
+  const lines = questionText
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (lines.length === 0) {
+    return [];
+  }
+
+  // 1. Try numbered pattern (with optional leading bullet): "- 1. ...", "1. ...", "1) ...", "(1) ...", "[1] ..."
+  const numberedPattern = /^(?:[-*•]\s+)?(?:(?:\d+[\.\)])|(?:\(\d+\))|(?:\[\d+\]))\s+(.+)$/;
+  const numberedChoices: string[] = [];
+  for (const line of lines) {
+    const match = line.match(numberedPattern);
+    if (match && match[1]) {
+      numberedChoices.push(match[1].trim());
+    }
+  }
+  if (numberedChoices.length >= 2) {
+    return numberedChoices;
+  }
+
+  // 2. Try lettered pattern (with optional leading bullet): "- A. ...", "A. ...", "A) ...", "(A) ...", "[A] ...", "a. ...", "a) ..."
+  const letteredPattern = /^(?:[-*•]\s+)?(?:(?:[a-zA-Z][\.\)])|(?:\([a-zA-Z]\))|(?:\[[a-zA-Z]\]))\s+(.+)$/;
+  const letteredChoices: string[] = [];
+  for (const line of lines) {
+    const match = line.match(letteredPattern);
+    if (match && match[1]) {
+      letteredChoices.push(match[1].trim());
+    }
+  }
+  if (letteredChoices.length >= 2) {
+    return letteredChoices;
+  }
+
+  // 3. Try explicit Option/Choice prefix: "Option 1: ...", "Choice A: ..."
+  const optionPrefixPattern = /^(?:[-*•]\s+)?(?:Option|Choice)\s+(?:\d+|[a-zA-Z]):?\s*(.+)$/i;
+  const optionChoices: string[] = [];
+  for (const line of lines) {
+    const match = line.match(optionPrefixPattern);
+    if (match && match[1]) {
+      optionChoices.push(match[1].trim());
+    }
+  }
+  if (optionChoices.length >= 2) {
+    return optionChoices;
+  }
+
+  // 4. Try simple bullet pattern: "- ...", "* ...", "• ..."
+  const bulletPattern = /^(?:[-*•])\s+(.+)$/;
+  const bulletChoices: string[] = [];
+  for (const line of lines) {
+    const match = line.match(bulletPattern);
+    if (match && match[1]) {
+      bulletChoices.push(match[1].trim());
+    }
+  }
+  if (bulletChoices.length >= 2) {
+    return bulletChoices;
+  }
+
+  return [];
+}
+
+/**
  * Formats a feedback needed / needs-info notification.
  */
 export function formatNeedsInfo(
@@ -100,7 +177,36 @@ export function formatNeedsInfo(
   if (payload.prUrl) {
     const prLabel = payload.prNumber ? `PR #${payload.prNumber}` : `PR for #${payload.issueNumber}`;
     lines.push('', `• *Pull Request*: [${prLabel}](${payload.prUrl})`);
+  } else if (payload.issueUrl) {
+    lines.push('', `• *Issue*: [Issue #${payload.issueNumber}](${payload.issueUrl})`);
   }
+  return lines.join('\n');
+}
+
+/**
+ * Formats a needs-info message that has been answered by the developer.
+ */
+export function formatNeedsInfoAnswered(
+  repository: string | undefined,
+  payload: NeedsInfoNotificationPayload,
+  answer: string,
+  mode: 'button' | 'text' = 'button'
+): string {
+  const repoTag = formatRepoTag(repository);
+  const lines = [
+    `${repoTag}❓ *Feedback Needed*: #${payload.issueNumber} - *${escapeMarkdown(payload.issueTitle)}*`,
+  ];
+  if (payload.question) {
+    lines.push('', `*Question*:`, `${escapeMarkdown(payload.question)}`);
+  }
+  if (payload.prUrl) {
+    const prLabel = payload.prNumber ? `PR #${payload.prNumber}` : `PR for #${payload.issueNumber}`;
+    lines.push('', `• *Pull Request*: [${prLabel}](${payload.prUrl})`);
+  } else if (payload.issueUrl) {
+    lines.push('', `• *Issue*: [Issue #${payload.issueNumber}](${payload.issueUrl})`);
+  }
+  const modeText = mode === 'text' ? 'via text' : 'via button';
+  lines.push('', `✅ *Answered* (${modeText}): ${escapeMarkdown(answer)}`);
   return lines.join('\n');
 }
 

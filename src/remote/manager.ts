@@ -5,6 +5,7 @@ import type {
   RemoteMessageOptions,
   InteractiveAction,
   ActionContext,
+  ActiveNeedsInfoRecord,
   TaskStartedNotificationPayload,
   TaskCompletedNotificationPayload,
   SpecCompletedNotificationPayload,
@@ -20,11 +21,13 @@ import {
   formatTaskCompleted,
   formatSpecCompleted,
   formatNeedsInfo,
+  formatNeedsInfoAnswered,
   formatQuotaPaused,
   formatQuotaResumed,
   formatQuotaResumedByDeveloper,
   buildQuotaResumeCallbackData,
   parseQuotaActionPayload,
+  parseQuestionChoices,
 } from './formatters.js';
 import type { QuotaMonitor } from '../quota/monitor.js';
 
@@ -45,6 +48,8 @@ export class RemoteControlManager {
   private processedQuotaActions = new Set<string>();
   private lastPausedEvent?: { resetAt: number; runner?: string; timestamp: number };
   private lastResumedEvent?: { runner?: string; timestamp: number };
+  private messageNeedsInfo: Map<number, ActiveNeedsInfoRecord> = new Map();
+  private issueNeedsInfo: Map<number, ActiveNeedsInfoRecord> = new Map();
 
   private boundOnTaskStarted: (payload: TaskStartedNotificationPayload) => void;
   private boundOnTaskCompleted: (payload: TaskCompletedNotificationPayload) => void;
@@ -122,10 +127,25 @@ export class RemoteControlManager {
       this.handleAgentEvent(event);
     };
 
+    this.setupProviderListeners();
+  }
+
+  private setupProviderListeners(): void {
     // Register quota action handler with provider
     this.provider.onAction('v1:q', async (_action, payload, userId, context) => {
       await this.handleQuotaAction(payload, userId, context);
     });
+
+    // Register needs-info action handler with provider
+    this.provider.onAction('v1:inf', async (_action, payload, userId) => {
+      await this.handleNeedsInfoAction(payload, userId);
+    });
+
+    if (this.provider.onTextReply) {
+      this.provider.onTextReply(async (replyToMessageId, text, userId) => {
+        await this.handleTextReply(replyToMessageId, text, userId);
+      });
+    }
   }
 
   public getProvider(): RemoteControlProvider {
@@ -154,6 +174,14 @@ export class RemoteControlManager {
 
   public isRunning(): boolean {
     return this.isStarted;
+  }
+
+  public getActiveNeedsInfo(issueNumber: number): ActiveNeedsInfoRecord | undefined {
+    return this.issueNeedsInfo.get(issueNumber);
+  }
+
+  public getActiveNeedsInfoByMessageId(messageId: number): ActiveNeedsInfoRecord | undefined {
+    return this.messageNeedsInfo.get(messageId);
   }
 
   public async start(): Promise<void> {
@@ -248,12 +276,160 @@ export class RemoteControlManager {
       return undefined;
     }
     const text = formatNeedsInfo(this.repository, payload);
-    return this.provider.sendMessage(text, {
-      chatId: options?.chatId ?? this.defaultChatId,
+    const targetChatId = options?.chatId ?? this.defaultChatId;
+
+    let actions = options?.actions;
+    const choices = payload.choices && payload.choices.length > 0
+      ? payload.choices
+      : parseQuestionChoices(payload.question);
+
+    if (!actions) {
+      const generatedActions: InteractiveAction[][] = [];
+      if (choices.length > 0) {
+        for (let i = 0; i < choices.length; i++) {
+          const choice = choices[i];
+          const cleanLabel = choice.replace(/^[\d+a-zA-Z][\.\)]\s*/, '').replace(/[*_`]/g, '').trim();
+          const buttonLabel = cleanLabel.length > 35 ? cleanLabel.slice(0, 32) + '...' : cleanLabel;
+          generatedActions.push([
+            {
+              id: `inf_${payload.issueNumber}_${i}`,
+              label: buttonLabel,
+              payload: `v1:inf:${payload.issueNumber}:${i}`,
+            },
+          ]);
+        }
+      }
+
+      const ghUrl = payload.issueUrl || payload.prUrl || (this.repository ? `https://github.com/${this.repository}/issues/${payload.issueNumber}` : undefined);
+      if (ghUrl) {
+        generatedActions.push([
+          {
+            id: `gh_${payload.issueNumber}`,
+            label: '🔗 Open on GitHub',
+            payload: '',
+            url: ghUrl,
+          },
+        ]);
+      }
+
+      if (generatedActions.length > 0) {
+        actions = generatedActions;
+      }
+    }
+
+    const res = await this.provider.sendMessage(text, {
+      chatId: targetChatId,
       parseMode: options?.parseMode ?? 'Markdown',
-      actions: options?.actions,
+      actions,
       replyToMessageId: options?.replyToMessageId,
     });
+
+    const record: ActiveNeedsInfoRecord = {
+      issueNumber: payload.issueNumber,
+      messageId: res.messageId,
+      chatId: targetChatId,
+      payload,
+      choices,
+      originalText: text,
+      answered: false,
+      createdAt: Date.now(),
+    };
+
+    this.messageNeedsInfo.set(res.messageId, record);
+    this.issueNeedsInfo.set(payload.issueNumber, record);
+
+    return res;
+  }
+
+  public async handleNeedsInfoAction(payload: string, userId: number): Promise<void> {
+    const parts = payload.split(':');
+    if (parts.length < 4) {
+      return;
+    }
+    const issueNumber = parseInt(parts[2], 10);
+    const choiceKey = parts.slice(3).join(':');
+
+    if (isNaN(issueNumber)) {
+      return;
+    }
+
+    const activeInfo = this.issueNeedsInfo.get(issueNumber);
+    if (activeInfo && activeInfo.answered) {
+      return; // Already answered
+    }
+
+    let answerText = choiceKey;
+    const choiceIndex = parseInt(choiceKey, 10);
+    if (!isNaN(choiceIndex) && activeInfo && activeInfo.choices && activeInfo.choices[choiceIndex] !== undefined) {
+      answerText = activeInfo.choices[choiceIndex];
+    }
+
+    if (activeInfo) {
+      activeInfo.answered = true;
+      activeInfo.selectedAnswer = answerText;
+
+      const updatedText = formatNeedsInfoAnswered(
+        this.repository,
+        activeInfo.payload,
+        answerText,
+        'button'
+      );
+
+      try {
+        await this.provider.editMessage(activeInfo.messageId, updatedText, {
+          chatId: activeInfo.chatId ?? this.defaultChatId,
+          actions: [],
+        });
+      } catch (err: any) {
+        console.error(`RemoteControlManager: failed to edit message #${activeInfo.messageId}:`, err);
+      }
+    }
+
+    if (this.actionController) {
+      try {
+        await this.actionController.replyToNeedsInfo(issueNumber, answerText);
+      } catch (err: any) {
+        console.error(`RemoteControlManager: error in replyToNeedsInfo for issue #${issueNumber}:`, err);
+      }
+    }
+  }
+
+  public async handleTextReply(replyToMessageId: number, text: string, userId: number): Promise<void> {
+    const activeInfo = this.messageNeedsInfo.get(replyToMessageId);
+    if (!activeInfo) {
+      return;
+    }
+
+    if (activeInfo.answered) {
+      return; // Already answered
+    }
+
+    activeInfo.answered = true;
+    activeInfo.selectedAnswer = text;
+
+    const updatedText = formatNeedsInfoAnswered(
+      this.repository,
+      activeInfo.payload,
+      text,
+      'text'
+    );
+
+    try {
+      await this.provider.editMessage(activeInfo.messageId, updatedText, {
+        chatId: activeInfo.chatId ?? this.defaultChatId,
+        actions: [],
+      });
+    } catch (err: any) {
+      console.error(`RemoteControlManager: failed to edit message #${activeInfo.messageId}:`, err);
+    }
+
+    if (this.actionController) {
+      try {
+        await this.actionController.replyToNeedsInfo(activeInfo.issueNumber, text);
+      } catch (err: any) {
+        console.error(`RemoteControlManager: error in replyToNeedsInfo for issue #${activeInfo.issueNumber}:`, err);
+      }
+    }
   }
 
   public async sendQuotaPaused(
@@ -398,3 +574,4 @@ export class RemoteControlManager {
     // AgentEventBus hook for potential event forwarding or logging
   }
 }
+
