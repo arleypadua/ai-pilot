@@ -1,6 +1,7 @@
 import type { TelegramNotificationsConfig } from '../types/index.js';
 import type { TelegramRateLimiter } from './rate_limiter.js';
 import type { AgentEventBus } from '../events/bus.js';
+import type { QuotaMonitor } from '../quota/monitor.js';
 
 export interface InteractiveAction {
   id: string; // Action prefix or identifier (e.g. 'v1:inf', 'v1:q')
@@ -8,6 +9,12 @@ export interface InteractiveAction {
   payload: string; // Callback data payload
   style?: 'primary' | 'danger' | 'default';
   url?: string; // If set, renders as a URL link button rather than callback button
+}
+
+export interface ActionContext {
+  messageId?: number;
+  chatId?: number | string;
+  originalText?: string;
 }
 
 export interface RemoteMessageOptions {
@@ -23,7 +30,10 @@ export interface RemoteControlProvider {
   stop(): Promise<void>;
   sendMessage(text: string, options?: RemoteMessageOptions): Promise<{ messageId: number }>;
   editMessage(messageId: number, text: string, options?: RemoteMessageOptions): Promise<void>;
-  onAction(actionPrefix: string, handler: (action: string, payload: string, userId: number) => Promise<void>): void;
+  onAction(
+    actionPrefix: string,
+    handler: (action: string, payload: string, userId: number, context?: ActionContext) => Promise<void>
+  ): void;
   onTextReply?(handler: (replyToMessageId: number, text: string, userId: number) => Promise<void>): void;
   onCommand?(command: string, handler: (args: string[], userId: number) => Promise<void>): void;
 }
@@ -93,5 +103,6 @@ export interface RemoteControlManagerOptions {
   notifications?: Partial<TelegramNotificationsConfig>;
   eventBus?: AgentEventBus;
   actionController?: RemoteActionController;
+  quotaMonitor?: QuotaMonitor;
 }
 

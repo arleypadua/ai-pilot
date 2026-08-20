@@ -136,3 +136,59 @@ export function formatQuotaResumed(
   const runnerStr = payload.runnerName ? ` for runner \`${payload.runnerName}\`` : '';
   return `${repoTag}▶️ *Quota Resumed*\n\nWorkers resumed${runnerStr}.`;
 }
+
+/**
+ * Formats an inline quota resumption message edited by developer action.
+ */
+export function formatQuotaResumedByDeveloper(
+  repository: string | undefined,
+  options?: {
+    originalText?: string;
+    timestamp?: Date;
+    runnerName?: string;
+  }
+): string {
+  const time = options?.timestamp ?? new Date();
+  const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const resumeNotice = `▶️ Resumed by developer at ${timeStr}`;
+
+  if (options?.originalText) {
+    if (options.originalText.includes('Resumed by developer at')) {
+      return options.originalText;
+    }
+    return `${options.originalText}\n\n${resumeNotice}`;
+  }
+
+  const repoTag = formatRepoTag(repository);
+  return `${repoTag}${resumeNotice}`;
+}
+
+/**
+ * Builds compact callback data for resuming a paused runner.
+ * Format: `v1:q:res:<runner>` (e.g. `v1:q:res:claude`, `v1:q:res:agy`, `v1:q:res:`)
+ */
+export function buildQuotaResumeCallbackData(runner?: string): string {
+  const normalized = runner ? runner.toLowerCase().trim() : '';
+  return `v1:q:res:${normalized}`;
+}
+
+/**
+ * Parses a quota callback query payload.
+ * Supports: `v1:q:res:<runner>` or `v1:q:res`
+ */
+export function parseQuotaActionPayload(
+  payload: string
+): { action: 'resume'; runner?: string } | null {
+  if (!payload || typeof payload !== 'string' || !payload.startsWith('v1:q:')) {
+    return null;
+  }
+  const parts = payload.split(':');
+  if (parts[2] === 'res') {
+    const runner = parts.slice(3).join(':').trim();
+    if (!runner || runner.toLowerCase() === 'all') {
+      return { action: 'resume', runner: undefined };
+    }
+    return { action: 'resume', runner };
+  }
+  return null;
+}

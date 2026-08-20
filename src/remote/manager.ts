@@ -3,6 +3,8 @@ import type {
   RemoteActionController,
   RemoteControlManagerOptions,
   RemoteMessageOptions,
+  InteractiveAction,
+  ActionContext,
   TaskStartedNotificationPayload,
   TaskCompletedNotificationPayload,
   SpecCompletedNotificationPayload,
@@ -20,7 +22,15 @@ import {
   formatNeedsInfo,
   formatQuotaPaused,
   formatQuotaResumed,
+  formatQuotaResumedByDeveloper,
+  buildQuotaResumeCallbackData,
+  parseQuotaActionPayload,
 } from './formatters.js';
+import type { QuotaMonitor } from '../quota/monitor.js';
+
+export interface SendQuotaPausedOptions extends RemoteMessageOptions {
+  actions?: InteractiveAction[][];
+}
 
 export class RemoteControlManager {
   private provider: RemoteControlProvider;
@@ -29,7 +39,12 @@ export class RemoteControlManager {
   private notifications: TelegramNotificationsConfig & { taskStarted?: boolean };
   private eventBus: AgentEventBus;
   private actionController?: RemoteActionController;
+  private quotaMonitor?: QuotaMonitor;
   private isStarted: boolean = false;
+
+  private processedQuotaActions = new Set<string>();
+  private lastPausedEvent?: { resetAt: number; runner?: string; timestamp: number };
+  private lastResumedEvent?: { runner?: string; timestamp: number };
 
   private boundOnTaskStarted: (payload: TaskStartedNotificationPayload) => void;
   private boundOnTaskCompleted: (payload: TaskCompletedNotificationPayload) => void;
@@ -37,6 +52,8 @@ export class RemoteControlManager {
   private boundOnNeedsInfo: (payload: NeedsInfoNotificationPayload) => void;
   private boundOnQuotaPaused: (payload: QuotaPausedNotificationPayload) => void;
   private boundOnQuotaResumed: (payload: QuotaResumedNotificationPayload) => void;
+  private boundOnQuotaMonitorPaused?: (event: any) => void;
+  private boundOnQuotaMonitorResumed?: (event: any) => void;
   private boundOnAgentEvent: (event: AgentEvent) => void;
 
   constructor(options: RemoteControlManagerOptions) {
@@ -53,6 +70,7 @@ export class RemoteControlManager {
     };
     this.eventBus = options.eventBus ?? AgentEventBus.getInstance();
     this.actionController = options.actionController;
+    this.quotaMonitor = options.quotaMonitor;
 
     this.boundOnTaskStarted = (payload) => {
       this.handleTaskStarted(payload).catch((err) => {
@@ -84,9 +102,30 @@ export class RemoteControlManager {
         console.error('RemoteControlManager error handling quota_resumed:', err);
       });
     };
+    if (this.quotaMonitor) {
+      this.boundOnQuotaMonitorPaused = ({ resetAt, waitMs, runnerName }: any) => {
+        const waitMinutes = Math.ceil(
+          (waitMs ?? (resetAt ? Math.max(1000, new Date(resetAt).getTime() - Date.now()) : 60000)) /
+            (60 * 1000)
+        );
+        this.handleQuotaPaused({ resetAt: new Date(resetAt), waitMinutes, runnerName }).catch((err) => {
+          console.error('RemoteControlManager error handling quota_monitor paused:', err);
+        });
+      };
+      this.boundOnQuotaMonitorResumed = ({ runnerName }: any) => {
+        this.handleQuotaResumed({ runnerName }).catch((err) => {
+          console.error('RemoteControlManager error handling quota_monitor resumed:', err);
+        });
+      };
+    }
     this.boundOnAgentEvent = (event) => {
       this.handleAgentEvent(event);
     };
+
+    // Register quota action handler with provider
+    this.provider.onAction('v1:q', async (_action, payload, userId, context) => {
+      await this.handleQuotaAction(payload, userId, context);
+    });
   }
 
   public getProvider(): RemoteControlProvider {
@@ -128,6 +167,11 @@ export class RemoteControlManager {
     Notifier.on('quota_paused', this.boundOnQuotaPaused);
     Notifier.on('quota_resumed', this.boundOnQuotaResumed);
 
+    if (this.quotaMonitor && this.boundOnQuotaMonitorPaused && this.boundOnQuotaMonitorResumed) {
+      this.quotaMonitor.on('quota_paused', this.boundOnQuotaMonitorPaused);
+      this.quotaMonitor.on('quota_resumed', this.boundOnQuotaMonitorResumed);
+    }
+
     this.eventBus.on('agent_event', this.boundOnAgentEvent);
 
     await this.provider.start();
@@ -143,6 +187,11 @@ export class RemoteControlManager {
     Notifier.off('needs_info', this.boundOnNeedsInfo);
     Notifier.off('quota_paused', this.boundOnQuotaPaused);
     Notifier.off('quota_resumed', this.boundOnQuotaResumed);
+
+    if (this.quotaMonitor && this.boundOnQuotaMonitorPaused && this.boundOnQuotaMonitorResumed) {
+      this.quotaMonitor.off('quota_paused', this.boundOnQuotaMonitorPaused);
+      this.quotaMonitor.off('quota_resumed', this.boundOnQuotaMonitorResumed);
+    }
 
     this.eventBus.off('agent_event', this.boundOnAgentEvent);
 
@@ -209,15 +258,28 @@ export class RemoteControlManager {
 
   public async sendQuotaPaused(
     payload: QuotaPausedNotificationPayload,
-    chatId?: number | string
+    chatIdOrOptions?: number | string | SendQuotaPausedOptions
   ): Promise<{ messageId: number } | undefined> {
     if (!this.notifications.quotaPaused) {
       return undefined;
     }
     const text = formatQuotaPaused(this.repository, payload);
+    const chatId = typeof chatIdOrOptions === 'object' ? chatIdOrOptions.chatId : chatIdOrOptions;
+    const customActions = typeof chatIdOrOptions === 'object' ? chatIdOrOptions.actions : undefined;
+    const actions: InteractiveAction[][] = customActions ?? [
+      [
+        {
+          id: 'v1:q',
+          label: '⚡ Resume Immediately',
+          payload: buildQuotaResumeCallbackData(payload.runnerName),
+        },
+      ],
+    ];
+
     return this.provider.sendMessage(text, {
       chatId: chatId ?? this.defaultChatId,
       parseMode: 'Markdown',
+      actions,
     });
   }
 
@@ -245,6 +307,49 @@ export class RemoteControlManager {
     });
   }
 
+  public async handleQuotaAction(
+    payload: string,
+    userId: number,
+    context?: ActionContext
+  ): Promise<boolean> {
+    const parsed = parseQuotaActionPayload(payload);
+    if (!parsed) {
+      return false;
+    }
+
+    const idempotencyKey = context?.messageId
+      ? `msg:${context.chatId ?? this.defaultChatId}:${context.messageId}`
+      : `payload:${payload}:${userId}`;
+
+    if (this.processedQuotaActions.has(idempotencyKey)) {
+      return false;
+    }
+    this.processedQuotaActions.add(idempotencyKey);
+
+    if (this.actionController) {
+      this.actionController.resumeQuota(parsed.runner);
+    }
+
+    if (context?.messageId) {
+      const updatedText = formatQuotaResumedByDeveloper(this.repository, {
+        originalText: context.originalText,
+        timestamp: new Date(),
+        runnerName: parsed.runner,
+      });
+      try {
+        await this.provider.editMessage(context.messageId, updatedText, {
+          chatId: context.chatId ?? this.defaultChatId,
+          parseMode: 'Markdown',
+          actions: [],
+        });
+      } catch (err: any) {
+        console.error('Failed to edit message inline on quota resume:', err);
+      }
+    }
+
+    return true;
+  }
+
   private async handleTaskStarted(payload: TaskStartedNotificationPayload): Promise<void> {
     await this.sendTaskStarted(payload);
   }
@@ -262,10 +367,30 @@ export class RemoteControlManager {
   }
 
   private async handleQuotaPaused(payload: QuotaPausedNotificationPayload): Promise<void> {
+    const now = Date.now();
+    const resetAtMs = payload.resetAt ? new Date(payload.resetAt).getTime() : 0;
+    if (
+      this.lastPausedEvent &&
+      this.lastPausedEvent.resetAt === resetAtMs &&
+      this.lastPausedEvent.runner === payload.runnerName &&
+      now - this.lastPausedEvent.timestamp < 2000
+    ) {
+      return;
+    }
+    this.lastPausedEvent = { resetAt: resetAtMs, runner: payload.runnerName, timestamp: now };
     await this.sendQuotaPaused(payload);
   }
 
   private async handleQuotaResumed(payload: QuotaResumedNotificationPayload): Promise<void> {
+    const now = Date.now();
+    if (
+      this.lastResumedEvent &&
+      this.lastResumedEvent.runner === payload.runnerName &&
+      now - this.lastResumedEvent.timestamp < 2000
+    ) {
+      return;
+    }
+    this.lastResumedEvent = { runner: payload.runnerName, timestamp: now };
     await this.sendQuotaResumed(payload);
   }
 

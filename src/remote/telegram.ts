@@ -4,6 +4,7 @@ import type {
   RemoteControlProvider,
   RemoteMessageOptions,
   TelegramRemoteProviderOptions,
+  ActionContext,
 } from './types.js';
 import { TelegramRateLimiter } from './rate_limiter.js';
 
@@ -14,7 +15,10 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
   private defaultChatId?: number | string;
   private rateLimiter: TelegramRateLimiter;
   private isRunning: boolean = false;
-  private actionHandlers: Map<string, (action: string, payload: string, userId: number) => Promise<void>> = new Map();
+  private actionHandlers: Map<
+    string,
+    (action: string, payload: string, userId: number, context?: ActionContext) => Promise<void>
+  > = new Map();
   private textReplyHandlers: Array<(replyToMessageId: number, text: string, userId: number) => Promise<void>> = [];
   private commandHandlers: Map<string, (args: string[], userId: number) => Promise<void>> = new Map();
 
@@ -92,6 +96,11 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
         return next();
       }
 
+      const messageId = ctx.callbackQuery?.message?.message_id;
+      const chatId = ctx.callbackQuery?.message?.chat?.id ?? ctx.chat?.id;
+      const originalText = (ctx.callbackQuery?.message as any)?.text;
+      const context: ActionContext = { messageId, chatId, originalText };
+
       let handled = false;
       for (const [prefix, handler] of this.actionHandlers.entries()) {
         if (data.startsWith(prefix)) {
@@ -100,7 +109,7 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
             await ctx.answerCallbackQuery();
           } catch {}
           try {
-            await handler(prefix, data, userId);
+            await handler(prefix, data, userId, context);
           } catch (err: any) {
             console.error(`Error handling action "${data}":`, err);
           }
@@ -136,7 +145,7 @@ export class TelegramRemoteProvider implements RemoteControlProvider {
 
   public onAction(
     actionPrefix: string,
-    handler: (action: string, payload: string, userId: number) => Promise<void>
+    handler: (action: string, payload: string, userId: number, context?: ActionContext) => Promise<void>
   ): void {
     this.actionHandlers.set(actionPrefix, handler);
   }
