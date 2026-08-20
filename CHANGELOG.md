@@ -1,5 +1,15 @@
 # imagos
 
+## 0.3.0
+
+### Minor Changes
+
+- a132f82: feat: add automated agent nudge loop for unmerged turns, dynamic autoMerge prompts, smooth TUI backlog scrolling, and unified specifications & scope management view.
+
+### Patch Changes
+
+- eebe384: fix: propagate parent spec blockers down to all child tickets in the DAG, support native GitHub issue relationships (`blockedBy`, `parent`, `subIssues`) via GraphQL, and automatically prune completed or closed specs from the active target scope with activity logging.
+
 ## 0.2.2
 
 ### Patch Changes
