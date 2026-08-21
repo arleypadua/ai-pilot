@@ -102,5 +102,21 @@ describe('QuotaMonitor', () => {
       // Runner MUST remain paused because resetAt is 2 hours in the future!
       expect(monitor.isRunnerPaused('claude')).toBe(true);
     });
+
+    it('should add 2-minute safety buffer to quota resetAt to prevent waking up on boundary', () => {
+      const monitor = new QuotaMonitor();
+      const rawReset = new Date(Date.now() + 10 * 60 * 1000);
+      let emittedResetAt: Date | undefined;
+      monitor.on('quota_paused', (e) => {
+        emittedResetAt = e.resetAt;
+      });
+
+      monitor.triggerQuotaPause(rawReset, 'Session limit', 'claude', [100]);
+      expect(emittedResetAt).toBeDefined();
+      expect(emittedResetAt!.getTime()).toBe(rawReset.getTime() + 2 * 60 * 1000);
+
+      const status = monitor.getStatus();
+      expect(status.resetAt!.getTime()).toBe(rawReset.getTime() + 2 * 60 * 1000);
+    });
   });
 });

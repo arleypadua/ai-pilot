@@ -120,6 +120,7 @@ describe('Remote Message Formatters', () => {
       expect(msg).toContain('[owner/repo] ❓ *Feedback Needed*: #24 - *feat: notifications*');
       expect(msg).toContain('*Question*:\nShould we enable auto-retry?');
       expect(msg).toContain('• *Pull Request*: [PR #30](https://github.com/owner/repo/pull/30)');
+      expect(msg).toContain('Swipe to reply, or comment on GitHub and label `ready-for-agent`');
     });
   });
 

@@ -2,13 +2,14 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type {
-  ClaudeLiveUsage,
-  QuotaStatus,
-  RollingWindowStats,
-  RunnerLiveUsage,
-  RunnerPauseInfo,
-  UsageProvider,
+import {
+  DEFAULT_RESET_BUFFER_MS,
+  type ClaudeLiveUsage,
+  type QuotaStatus,
+  type RollingWindowStats,
+  type RunnerLiveUsage,
+  type RunnerPauseInfo,
+  type UsageProvider,
 } from './types.js';
 import { ClaudeUsageProvider } from './providers/claude.js';
 import { AgyUsageProvider } from './providers/agy.js';
@@ -160,13 +161,15 @@ export class QuotaMonitor extends EventEmitter {
     resetAt: Date,
     reason: string = 'Quota limit reached',
     runnerName: string = 'claude',
-    affectedIssues?: number[]
+    affectedIssues?: number[],
+    bufferMs: number = DEFAULT_RESET_BUFFER_MS
   ): void {
     const rName = runnerName.toLowerCase();
+    const effectiveResetAt = new Date(resetAt.getTime() + bufferMs);
     const existing = this.pausedRunners.get(rName);
 
     // If already paused and the reset time is effectively unchanged (within 60s), do not re-trigger/spam events
-    if (existing && Math.abs(existing.resetAt.getTime() - resetAt.getTime()) < 60000) {
+    if (existing && Math.abs(existing.resetAt.getTime() - effectiveResetAt.getTime()) < 60000) {
       if (affectedIssues && affectedIssues.length > 0) {
         const merged = Array.from(new Set([...(existing.affectedIssues || []), ...affectedIssues]));
         existing.affectedIssues = merged;
@@ -177,7 +180,7 @@ export class QuotaMonitor extends EventEmitter {
     const pauseInfo: RunnerPauseInfo = {
       runnerName: rName,
       pausedAt: new Date(),
-      resetAt,
+      resetAt: effectiveResetAt,
       reason,
       affectedIssues,
     };
@@ -185,7 +188,7 @@ export class QuotaMonitor extends EventEmitter {
 
     this.isPaused = true;
     this.pausedAt = new Date();
-    this.resetAt = resetAt;
+    this.resetAt = effectiveResetAt;
     this.pauseReason = reason;
 
     // Send SIGSTOP only to active child PIDs of the paused runner
@@ -199,7 +202,7 @@ export class QuotaMonitor extends EventEmitter {
       }
     }
 
-    const waitMs = Math.max(1000, resetAt.getTime() - Date.now());
+    const waitMs = Math.max(1000, effectiveResetAt.getTime() - Date.now());
     this.emit('quota_paused', {
       pausedAt: this.pausedAt,
       resetAt: this.resetAt,

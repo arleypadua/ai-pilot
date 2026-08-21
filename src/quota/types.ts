@@ -1,3 +1,5 @@
+export const DEFAULT_RESET_BUFFER_MS = 2 * 60 * 1000; // 2 minute safety margin to avoid premature window wakeups
+
 export type QuotaWindowType = 'five_hour' | 'weekly' | 'daily' | 'session' | 'other';
 
 export interface QuotaBucket {

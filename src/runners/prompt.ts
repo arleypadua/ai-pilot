@@ -1,4 +1,4 @@
-import type { TaskContext } from '../types/index.js';
+import type { TaskContext } from "../types/index.js";
 
 export interface PromptBuilderOptions {
   taskPrefix?: (issueRef: string) => string;
@@ -8,12 +8,15 @@ export interface PromptBuilderOptions {
 /**
  * Builds the canonical Guidelines & Protocol section for agent execution.
  */
-export function buildGuidelines(context: TaskContext, codeReviewHint?: string): string {
+export function buildGuidelines(
+  context: TaskContext,
+  codeReviewHint?: string,
+): string {
   const {
     issue,
-    baseBranch = 'main',
+    baseBranch = "main",
     autoMerge = true,
-    mergeMethod = 'squash',
+    mergeMethod = "squash",
   } = context;
 
   const mergeGuideline = autoMerge
@@ -26,7 +29,7 @@ export function buildGuidelines(context: TaskContext, codeReviewHint?: string): 
 
   return `### Guidelines & Protocol
 1. **Feedback, Questions & Human Review**: If you encounter blocking ambiguities, require clarification, or decide that manual human review is required before merging:
-   - Post your comment or question: \`gh issue comment ${issue.number} --body "❓ **Agent Question**: <your question>"\` or explain why manual review/decision is needed.
+   - Post your comment or question: \`gh issue comment ${issue.number} --body "❓ **Agent Question**: <your question/explanation>"\`
    - Mark for developer feedback: \`gh issue edit ${issue.number} --add-label "ready-for-human" --remove-label "ready-for-agent"\` (or \`--add-label "needs-info"\`).
    - **Immediately conclude execution and exit.** Do not guess or leave the ticket in an untagged open state.
 2. **Follow-up Subtasks & Triage**: If you identify distinct out-of-scope work or follow-up subtasks:
@@ -44,13 +47,11 @@ export function buildGuidelines(context: TaskContext, codeReviewHint?: string): 
  * In continuation mode, redundant task descriptions, guidelines, and extra prompts are omitted
  * because they already exist in the active session transcript.
  */
-export function buildRunnerPrompt(context: TaskContext, options?: PromptBuilderOptions): string {
-  const {
-    issue,
-    isContinuation,
-    userFeedback,
-    extraPrompt,
-  } = context;
+export function buildRunnerPrompt(
+  context: TaskContext,
+  options?: PromptBuilderOptions,
+): string {
+  const { issue, isContinuation, userFeedback, extraPrompt } = context;
   const issueRef = issue.url || `#${issue.number}`;
   const prefix = options?.taskPrefix
     ? options.taskPrefix(issueRef)
@@ -79,14 +80,14 @@ Resume work on this task after a session pause. Continue from your previous stat
 
   const extraSection = extraPrompt
     ? `\n### Repository Instructions\n${extraPrompt.trim()}\n`
-    : '';
+    : "";
 
   const guidelines = buildGuidelines(context, options?.codeReviewHint);
 
   return `${prefix}
 
 ### Task Description
-${issue.body || 'No description provided.'}
+${issue.body || "No description provided."}
 ${extraSection}
 ${guidelines}
 `;

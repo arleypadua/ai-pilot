@@ -185,6 +185,7 @@ export function formatNeedsInfo(
   } else if (payload.issueUrl) {
     lines.push('', `• *Issue*: [Issue #${payload.issueNumber}](${payload.issueUrl})`);
   }
+  lines.push('', '💡 _Swipe to reply, or comment on GitHub and label `ready-for-agent`._');
   return lines.join('\n');
 }
 
