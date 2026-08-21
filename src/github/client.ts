@@ -337,11 +337,27 @@ export class GitHubClient {
         'ready-for-agent': '0E8A16',
         'needs-info': 'D93F0B',
         'ready-for-human': 'B60205',
+        'human-task': 'B60205',
+        'human-tasks': 'B60205',
         'needs-triage': 'FBCA04',
         'wontfix': 'FFFFFF',
       };
+      const descriptions: Record<string, string> = {
+        'ready-for-agent': 'Queued for autonomous agent execution',
+        'needs-info': 'Requires more information from developer',
+        'ready-for-human': 'Ready for human review, manual task, or merge',
+        'human-task': 'Manual task assigned to human developer',
+        'human-tasks': 'Manual task assigned to human developer',
+        'needs-triage': 'Pending triage / specification',
+        'wontfix': 'Will not be implemented',
+      };
       const color = colors[labelName] || 'EDEDED';
-      await execa('gh', ['label', 'create', labelName, ...this.repoArgs(repo), '--color', color, '--force'], {
+      const description = descriptions[labelName];
+      const args = ['label', 'create', labelName, ...this.repoArgs(repo), '--color', color, '--force'];
+      if (description) {
+        args.push('--description', description);
+      }
+      await execa('gh', args, {
         cwd: this.cwd,
       });
     } catch {
@@ -350,8 +366,26 @@ export class GitHubClient {
   }
 
   /**
+   * Ensures that multiple labels exist on the repository.
+   *
+   * @param labels - Array of label names or a Record of label name mappings to ensure.
+   * @param repo - Optional repository override in `owner/repo` format.
+   */
+  public async ensureLabelsExist(
+    labels: string[] | Record<string, string>,
+    repo?: string
+  ): Promise<void> {
+    const labelList = Array.isArray(labels) ? labels : Object.values(labels);
+    for (const label of labelList) {
+      if (label && typeof label === 'string') {
+        await this.ensureLabelExists(label, repo);
+      }
+    }
+  }
+
+  /**
    * Adds and/or removes labels from a GitHub issue.
-   * Automatically attempts to create any missing labels if label addition fails and retries once.
+   * Automatically attempts to create any missing labels if label addition/removal fails and retries once.
    *
    * @param issueNumber - The issue number whose labels should be modified.
    * @param options - Object specifying labels to add and/or remove.
@@ -381,18 +415,30 @@ export class GitHubClient {
     try {
       await execa('gh', args, { cwd: this.cwd });
     } catch (err: any) {
-      // If label not found, try creating the label and retry once
-      if (options.add && options.add.length > 0) {
-        for (const label of options.add) {
-          await this.ensureLabelExists(label, repo);
+      // If label not found, try creating any missing labels (both added and removed) and retry
+      const allLabels = [...(options.add || []), ...(options.remove || [])];
+      for (const label of allLabels) {
+        await this.ensureLabelExists(label, repo);
+      }
+      try {
+        await execa('gh', args, { cwd: this.cwd });
+        return;
+      } catch (retryErr: any) {
+        // If removal still fails (e.g. lack of permission to create labels), try applying add-only labels
+        if (options.add && options.add.length > 0 && options.remove && options.remove.length > 0) {
+          try {
+            const addOnlyArgs = ['issue', 'edit', String(issueNumber), ...this.repoArgs(repo)];
+            for (const label of options.add) {
+              addOnlyArgs.push('--add-label', label);
+            }
+            await execa('gh', addOnlyArgs, { cwd: this.cwd });
+            return;
+          } catch {
+            // Ignore and fall through to warning log
+          }
         }
-        try {
-          await execa('gh', args, { cwd: this.cwd });
-          return;
-        } catch {
-          // Log failure gracefully without crashing caller
-          ActivityLogger.warn(`Warning: Could not update labels for issue #${issueNumber}: ${err.message}`);
-        }
+        // Log failure gracefully without crashing caller
+        ActivityLogger.warn(`Warning: Could not update labels for issue #${issueNumber}: ${retryErr.message || err.message}`);
       }
     }
   }

@@ -146,7 +146,14 @@ export class IssueDAG {
       return 'completed'; // Treat wontfix as non-blocking terminal
     }
 
-    if (labelNames.has(needsInfoLabel) || labelNames.has(readyForHumanLabel)) {
+    const isHumanTask =
+      labelNames.has(readyForHumanLabel) ||
+      labelNames.has('human-task') ||
+      labelNames.has('human-tasks') ||
+      labelNames.has('human_task') ||
+      labelNames.has('human');
+
+    if (labelNames.has(needsInfoLabel) || isHumanTask) {
       return 'waiting_feedback';
     }
 

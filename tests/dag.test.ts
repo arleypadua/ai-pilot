@@ -71,7 +71,7 @@ describe('IssueDAG', () => {
     expect(readyNodes.map((n) => n.issue.number)).toEqual([2]);
   });
 
-  it('should mark tasks with needs-info or ready-for-human as waiting_feedback', () => {
+  it('should mark tasks with needs-info, ready-for-human, or human-task as waiting_feedback', () => {
     const issues: GitHubIssue[] = [
       {
         number: 3,
@@ -93,13 +93,23 @@ describe('IssueDAG', () => {
         createdAt: '2026-08-19T10:00:00Z',
         updatedAt: '2026-08-19T10:00:00Z',
       },
+      {
+        number: 5,
+        title: 'Manual 2FA hardware key setup',
+        body: 'Must be done manually by admin',
+        state: 'OPEN',
+        labels: [{ name: 'human-task' }],
+        url: 'https://github.com/owner/repo/issues/5',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
     ];
 
     const dag = new IssueDAG(DEFAULT_CONFIG);
     dag.build(issues);
 
     const feedbackNodes = dag.getWaitingFeedbackNodes();
-    expect(feedbackNodes.map((n) => n.issue.number).sort()).toEqual([3, 4]);
+    expect(feedbackNodes.map((n) => n.issue.number).sort()).toEqual([3, 4, 5]);
   });
 
   it('should scope execution strictly to a target spec and detect completion', () => {

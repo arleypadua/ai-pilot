@@ -232,7 +232,7 @@ export class Dashboard {
         ready.map((n) => `#${n.issue.number}`).join(', ') || pc.gray('None'),
       ],
       [
-        pc.yellow('Waiting Feedback'),
+        pc.yellow('Human Action Required'),
         feedback.length.toString(),
         feedback.map((n) => `#${n.issue.number}`).join(', ') || pc.gray('None'),
       ],

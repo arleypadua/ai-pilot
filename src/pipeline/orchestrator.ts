@@ -228,6 +228,15 @@ export class Orchestrator implements RemoteActionController {
       );
     }
 
+    // Ensure configured workflow labels exist on repository
+    if (this.config.labels) {
+      try {
+        await this.gh.ensureLabelsExist(this.config.labels);
+      } catch {
+        // Best effort: repository permissions might be restricted
+      }
+    }
+
     // Initial fetch of Claude live usage from /usage
     await this.quotaMonitor.fetchLiveUsage(true);
 

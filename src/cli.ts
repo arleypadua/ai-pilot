@@ -708,9 +708,9 @@ program
 
       console.log(pc.bold(pc.cyan(`\n=== ISSUE BACKLOG & QUEUE: ${config.repository || 'Local'} ===\n`)));
 
-      // 1. PENDING ON HUMAN
+      // 1. HUMAN ACTION REQUIRED (TASKS & FEEDBACK)
       if (!filterActive || options.pending) {
-        console.log(pc.bold(pc.yellow(`📌 Pending on Human Feedback (${waitingNodes.length}):`)));
+        console.log(pc.bold(pc.yellow(`📌 Human Action Required (${waitingNodes.length}):`)));
         if (waitingNodes.length === 0) {
           console.log(pc.gray('  No issues waiting for human input.\n'));
         } else {

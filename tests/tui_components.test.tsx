@@ -383,6 +383,59 @@ describe('TUI Components', () => {
     expect(output).toContain('[o] Open in Browser');
   });
 
+  it('should render distinct badges for needs-info vs human-task in CategoryIssuesView', () => {
+    const { lastFrame } = render(
+      <CategoryIssuesView
+        categoryTitle="Human Action Required (Tasks & Feedback)"
+        issues={[
+          {
+            issue: {
+              number: 188,
+              title: 'Provide database connection credentials',
+              state: 'OPEN',
+              labels: [{ name: 'needs-info' }],
+              created_at: '2026-08-19T10:00:00Z',
+              updated_at: '2026-08-19T10:00:00Z',
+            } as any,
+            status: 'waiting_feedback',
+          },
+          {
+            issue: {
+              number: 189,
+              title: 'Manual DNS and SSL Certificate Setup',
+              state: 'OPEN',
+              labels: [{ name: 'ready-for-human' }],
+              created_at: '2026-08-19T10:00:00Z',
+              updated_at: '2026-08-19T10:00:00Z',
+            } as any,
+            status: 'waiting_feedback',
+          },
+          {
+            issue: {
+              number: 190,
+              title: 'Deploy to custom bare-metal server',
+              state: 'OPEN',
+              labels: [{ name: 'human-task' }],
+              created_at: '2026-08-19T10:00:00Z',
+              updated_at: '2026-08-19T10:00:00Z',
+            } as any,
+            status: 'waiting_feedback',
+          },
+        ]}
+        selectedIndex={0}
+        repository="owner/test-repo"
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('ISSUES: HUMAN ACTION REQUIRED (TASKS & FEEDBACK)');
+    expect(output).toContain('#188');
+    expect(output).toContain('needs info');
+    expect(output).toContain('#189');
+    expect(output).toContain('human task');
+    expect(output).toContain('#190');
+  });
+
   it('should render CategoryIssuesView with kill confirmation modal when requested', () => {
     const { lastFrame } = render(
       <CategoryIssuesView

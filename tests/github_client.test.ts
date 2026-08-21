@@ -169,6 +169,54 @@ describe('GitHubClient', () => {
     });
   });
 
+  describe('ensureLabelExists and ensureLabelsExist', () => {
+    it('should create label with default color and description if known', async () => {
+      mockedExeca.mockResolvedValueOnce({ stdout: '' } as any);
+
+      const client = new GitHubClient({ repository: 'owner/repo' });
+      await client.ensureLabelExists('ready-for-agent');
+
+      expect(mockedExeca).toHaveBeenCalledWith(
+        'gh',
+        [
+          'label',
+          'create',
+          'ready-for-agent',
+          '--repo',
+          'owner/repo',
+          '--color',
+          '0E8A16',
+          '--force',
+          '--description',
+          'Queued for autonomous agent execution',
+        ],
+        expect.any(Object)
+      );
+    });
+
+    it('should ensure multiple labels exist from record or array', async () => {
+      mockedExeca.mockResolvedValue({ stdout: '' } as any);
+
+      const client = new GitHubClient({ repository: 'owner/repo' });
+      await client.ensureLabelsExist({
+        readyForAgent: 'ready-for-agent',
+        needsInfo: 'needs-info',
+      });
+
+      expect(mockedExeca).toHaveBeenCalledTimes(2);
+      expect(mockedExeca).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['label', 'create', 'ready-for-agent']),
+        expect.any(Object)
+      );
+      expect(mockedExeca).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['label', 'create', 'needs-info']),
+        expect.any(Object)
+      );
+    });
+  });
+
   describe('editIssueLabels', () => {
     it('should edit labels with add and remove options', async () => {
       mockedExeca.mockResolvedValueOnce({ stdout: '' } as any);
@@ -183,16 +231,42 @@ describe('GitHubClient', () => {
       );
     });
 
-    it('should attempt label creation and retry if initial edit fails', async () => {
+    it('should attempt label creation for both added and removed labels and retry if initial edit fails', async () => {
       mockedExeca
-        .mockRejectedValueOnce(new Error('label not found'))
-        .mockResolvedValueOnce({ stdout: '' } as any) // label create
+        .mockRejectedValueOnce(new Error("'needs-info' not found"))
+        .mockResolvedValueOnce({ stdout: '' } as any) // label create ready-for-agent
+        .mockResolvedValueOnce({ stdout: '' } as any) // label create needs-info
         .mockResolvedValueOnce({ stdout: '' } as any); // retry edit
 
-      const client = new GitHubClient();
-      await client.editIssueLabels(10, { add: ['custom-label'] });
+      const client = new GitHubClient({ repository: 'owner/repo' });
+      await client.editIssueLabels(202, {
+        add: ['ready-for-agent'],
+        remove: ['needs-info'],
+      });
 
-      expect(mockedExeca).toHaveBeenCalledTimes(3);
+      expect(mockedExeca).toHaveBeenCalledTimes(4);
+    });
+
+    it('should fallback to applying add-only labels if remove still fails on retry', async () => {
+      mockedExeca
+        .mockRejectedValueOnce(new Error("'needs-info' not found")) // first edit attempt fails
+        .mockResolvedValueOnce({ stdout: '' } as any) // ensure ready-for-agent
+        .mockResolvedValueOnce({ stdout: '' } as any) // ensure needs-info
+        .mockRejectedValueOnce(new Error("'needs-info' not found")) // retry with remove fails
+        .mockResolvedValueOnce({ stdout: '' } as any); // add-only fallback succeeds
+
+      const client = new GitHubClient({ repository: 'owner/repo' });
+      await client.editIssueLabels(202, {
+        add: ['ready-for-agent'],
+        remove: ['needs-info'],
+      });
+
+      expect(mockedExeca).toHaveBeenCalledTimes(5);
+      expect(mockedExeca).toHaveBeenLastCalledWith(
+        'gh',
+        ['issue', 'edit', '202', '--repo', 'owner/repo', '--add-label', 'ready-for-agent'],
+        expect.any(Object)
+      );
     });
   });
 

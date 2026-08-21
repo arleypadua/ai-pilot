@@ -99,4 +99,19 @@ describe('Orchestrator Provider Management', () => {
     expect(resolved).toBe('claude');
     expect(facade.isProviderAllowed(resolved)).toBe(true);
   });
+
+  it('ensures configured workflow labels exist on repository during start()', async () => {
+    const orchestrator = new Orchestrator(config);
+    const gh = (orchestrator as any).gh;
+    const checkAuthSpy = vi.spyOn(gh, 'checkAuth').mockResolvedValue(true);
+    const ensureLabelsSpy = vi.spyOn(gh, 'ensureLabelsExist').mockResolvedValue(undefined);
+    vi.spyOn(orchestrator.getQuotaMonitor(), 'fetchLiveUsage').mockResolvedValue(undefined as any);
+    vi.spyOn(orchestrator, 'tick').mockResolvedValue(undefined);
+
+    await orchestrator.start();
+    await orchestrator.stop();
+
+    expect(checkAuthSpy).toHaveBeenCalled();
+    expect(ensureLabelsSpy).toHaveBeenCalledWith(config.labels);
+  });
 });

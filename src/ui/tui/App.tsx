@@ -209,7 +209,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
       case 'ready':
         return 'Ready for Agent';
       case 'waiting':
-        return 'Waiting Feedback';
+        return 'Human Action Required (Tasks & Feedback)';
       case 'blocked':
         return 'Blocked by Dependencies';
     }

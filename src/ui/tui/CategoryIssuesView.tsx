@@ -47,8 +47,20 @@ export const CategoryIssuesView: React.FC<CategoryIssuesViewProps> = ({
     switch (item.status) {
       case 'ready':
         return <Text color="green">🟢 ready</Text>;
-      case 'waiting_feedback':
-        return <Text color="yellow">👀 waiting review</Text>;
+      case 'waiting_feedback': {
+        const labels = item.issue.labels?.map((l) => l.name.toLowerCase()) || [];
+        const isNeedsInfo = labels.includes('needs-info');
+        const isHumanTask = labels.some(
+          (l) => l === 'ready-for-human' || l === 'human-task' || l === 'human-tasks' || l === 'human_task' || l === 'human'
+        );
+        if (isNeedsInfo) {
+          return <Text color="yellow">❓ needs info</Text>;
+        }
+        if (isHumanTask) {
+          return <Text color="magenta">👤 human task</Text>;
+        }
+        return <Text color="yellow">👀 in review</Text>;
+      }
       case 'blocked':
         return <Text color="gray">🚫 blocked</Text>;
       default:

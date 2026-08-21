@@ -317,14 +317,14 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
           </Text>
         </Box>
 
-        {/* 3. Waiting Feedback Row */}
+        {/* 3. Human Action Required Row */}
         <Box flexDirection="row">
           <Box width={26}>
             <Text
               color={selectedIndex === workers.length + 2 ? 'cyan' : 'yellow'}
               bold={selectedIndex === workers.length + 2}
             >
-              {selectedIndex === workers.length + 2 ? '❯ ' : '  '}🟡 Waiting Feedback:
+              {selectedIndex === workers.length + 2 ? '❯ ' : '  '}👤 Human Action:
             </Text>
           </Box>
           <Box width={6}>
