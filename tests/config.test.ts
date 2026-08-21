@@ -53,7 +53,9 @@ describe('AutoPilotConfigSchema', () => {
 
       expect(config.quota).toEqual({
         pauseOnLimit: true,
+        utilizationThresholdLimit: 0.85,
         utilizationThreshold: 0.85,
+        tokenCeiling: undefined,
         proxyPort: 9876,
       });
 
@@ -131,6 +133,7 @@ describe('AutoPilotConfigSchema', () => {
       expect(result.remote).toEqual(custom.remote);
       expect(result.quota).toEqual({
         pauseOnLimit: false,
+        utilizationThresholdLimit: 0.9,
         utilizationThreshold: 0.9,
         tokenCeiling: 25000,
         proxyPort: 8080,
@@ -448,9 +451,15 @@ describe('AutoPilotConfigSchema', () => {
       expect(() => AutoPilotConfigSchema.parse({ mergeMethod: 'invalid-merge' })).toThrow(ZodError);
     });
 
-    it('rejects quota utilizationThreshold outside [0.1, 1.0]', () => {
+    it('rejects quota utilizationThreshold and utilizationThresholdLimit outside [0.01, 1.0]', () => {
       expect(() =>
-        AutoPilotConfigSchema.parse({ quota: { utilizationThreshold: 0.05 } })
+        AutoPilotConfigSchema.parse({ quota: { utilizationThresholdLimit: 0.005 } })
+      ).toThrow(ZodError);
+      expect(() =>
+        AutoPilotConfigSchema.parse({ quota: { utilizationThresholdLimit: 1.5 } })
+      ).toThrow(ZodError);
+      expect(() =>
+        AutoPilotConfigSchema.parse({ quota: { utilizationThreshold: 0.005 } })
       ).toThrow(ZodError);
       expect(() =>
         AutoPilotConfigSchema.parse({ quota: { utilizationThreshold: 1.5 } })

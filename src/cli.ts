@@ -340,7 +340,7 @@ program
         },
         quota: {
           pauseOnLimit: true,
-          utilizationThreshold: 0.95,
+          utilizationThresholdLimit: 0.85,
         },
         labels: {
           readyForAgent: 'ready-for-agent',

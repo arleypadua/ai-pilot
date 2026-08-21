@@ -195,6 +195,17 @@ export class GitHubClient {
                   state
                 }
               }
+              comments(first: 50) {
+                nodes {
+                  id
+                  author {
+                    login
+                  }
+                  body
+                  createdAt
+                  updatedAt
+                }
+              }
             }
           }
         }
@@ -250,6 +261,15 @@ export class GitHubClient {
         number: s.number,
         title: s.title,
         state: s.state,
+      })),
+      comments: (node.comments?.nodes || []).map((c: any) => ({
+        id: c.id,
+        author: {
+          login: c.author?.login || '',
+        },
+        body: c.body || '',
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
       })),
     }));
   }

@@ -278,7 +278,8 @@ export interface AutoPilotConfig {
   remote: RemoteControlConfig;
   quota: {
     pauseOnLimit: boolean;
-    utilizationThreshold: number;
+    utilizationThresholdLimit: number;
+    utilizationThreshold?: number;
     tokenCeiling?: number;
     proxyPort?: number;
   };
@@ -289,4 +290,19 @@ export interface AutoPilotConfig {
     needsTriage: string;
     wontfix: string;
   };
+}
+
+export interface EnqueueTaskOptions {
+  force?: boolean;
+}
+export type TaskEnqueueOptions = EnqueueTaskOptions;
+
+export interface EnqueueResult {
+  success: boolean;
+  message: string;
+  requiresConfirmation?: boolean;
+  blockerNumbers?: number[];
+  childNumbers?: number[];
+  isSpec?: boolean;
+  isClosed?: boolean;
 }

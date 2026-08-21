@@ -80,4 +80,27 @@ describe('Runner Prompt Builder', () => {
     expect(guidelines).toContain('leave the Pull Request open for developer review and merge (do not auto-merge)');
     expect(guidelines).not.toContain('gh pr merge');
   });
+
+  it('includes issue comments and triage notes in initial prompt when present', () => {
+    const contextWithComments: TaskContext = {
+      ...baseContext,
+      issue: {
+        ...baseContext.issue,
+        comments: [
+          {
+            id: 'c-1',
+            author: { login: 'octocat' },
+            body: 'Triage brief: Use the new Mutex class in src/sync/mutex.ts instead of raw flags.',
+            createdAt: '2026-08-20T12:00:00Z',
+          },
+        ],
+      },
+    };
+
+    const prompt = buildRunnerPrompt(contextWithComments);
+
+    expect(prompt).toContain('### Issue Discussion & Comments');
+    expect(prompt).toContain('**@octocat** (2026-08-20T12:00:00Z):');
+    expect(prompt).toContain('Triage brief: Use the new Mutex class in src/sync/mutex.ts');
+  });
 });

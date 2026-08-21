@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { execa } from "execa";
-import type { AutoPilotConfig, DAGNode, ProviderInfo } from "../types/index.js";
+import type { AutoPilotConfig, DAGNode, ProviderInfo, EnqueueTaskOptions, EnqueueResult } from "../types/index.js";
 import { GitHubClient } from "../github/client.js";
 import { IssueDAG } from "../github/dag.js";
 import { WorktreeManager } from "../worktree/manager.js";
@@ -43,6 +43,7 @@ export class Orchestrator implements RemoteActionController {
   private isInteractive: boolean = false;
   private pollTimer?: NodeJS.Timeout;
   private activeTaskNumbers: Set<number> = new Set();
+  private manualPriorityQueue: number[] = [];
   private lastKnownFeedbackQuestions: Map<number, string> = new Map();
   private notifiedSpecCompletions: Set<number> = new Set();
   private tickListeners: Array<() => void> = [];
@@ -58,7 +59,10 @@ export class Orchestrator implements RemoteActionController {
     this.gh = new GitHubClient({ repository: config.repository });
     this.dag = new IssueDAG(config);
     this.worktreeMgr = new WorktreeManager();
-    this.quotaMonitor = new QuotaMonitor();
+    this.quotaMonitor = new QuotaMonitor({
+      ...config.quota,
+      allowedProviders: config.allowedProviders || config.allowedRunners,
+    });
     this.runnerFacade = new RunnerFacade({
       quotaMonitor: this.quotaMonitor,
       defaultRunner: config.runner,
@@ -116,6 +120,15 @@ export class Orchestrator implements RemoteActionController {
 
     // Setup quota event listeners
     this.quotaMonitor.on("quota_paused", ({ resetAt, waitMs, runnerName, affectedIssues }) => {
+      const configuredAllowed = this.config.allowedProviders || this.config.allowedRunners;
+      if (
+        runnerName &&
+        configuredAllowed &&
+        configuredAllowed.length > 0 &&
+        !configuredAllowed.map((p) => p.toLowerCase()).includes(runnerName.toLowerCase())
+      ) {
+        return;
+      }
       const waitMinutes = Math.ceil(waitMs / (60 * 1000));
       this.stateMgr.updateDaemonStatus("paused_quota", resetAt.toISOString());
       const activeTasks =
@@ -139,6 +152,15 @@ export class Orchestrator implements RemoteActionController {
     });
 
     this.quotaMonitor.on("quota_resumed", ({ runnerName }) => {
+      const configuredAllowed = this.config.allowedProviders || this.config.allowedRunners;
+      if (
+        runnerName &&
+        configuredAllowed &&
+        configuredAllowed.length > 0 &&
+        !configuredAllowed.map((p) => p.toLowerCase()).includes(runnerName.toLowerCase())
+      ) {
+        return;
+      }
       this.stateMgr.updateDaemonStatus("running");
       Notifier.notifyQuotaResumed(runnerName);
       const runnerStr = runnerName ? ` for ${runnerName}` : "";
@@ -166,6 +188,10 @@ export class Orchestrator implements RemoteActionController {
 
   public isStarted(): boolean {
     return this.isSessionStarted;
+  }
+
+  public getPriorityQueue(): number[] {
+    return [...this.manualPriorityQueue];
   }
 
   public setTargetSpecs(specs: number[]): void {
@@ -390,16 +416,62 @@ export class Orchestrator implements RemoteActionController {
       }
     }
 
-    // 6. Schedule Ready Tasks up to maxConcurrency (with Runner Quota Filtering)
-    const readyNodes = this.dag.getReadyNodes();
-    const availableSlots =
+    // 6. Schedule Tasks up to maxConcurrency
+    let availableSlots =
       this.config.maxConcurrency - this.activeTaskNumbers.size;
 
-    if (availableSlots <= 0 || readyNodes.length === 0) {
+    if (availableSlots <= 0) {
       return;
     }
 
-    // Filter tasks whose assigned runner is allowed and not currently paused due to quota
+    // 6a. Priority Queue Scheduling (Explicitly enqueued issues)
+    for (const priorityIssueNum of [...this.manualPriorityQueue]) {
+      if (availableSlots <= 0) break;
+      if (this.activeTaskNumbers.has(priorityIssueNum)) {
+        this.manualPriorityQueue = this.manualPriorityQueue.filter((n) => n !== priorityIssueNum);
+        continue;
+      }
+
+      let node = this.dag.getNode(priorityIssueNum);
+      if (!node) {
+        try {
+          const fetchedIssue = await this.gh.fetchIssue(priorityIssueNum);
+          if (fetchedIssue) {
+            this.dag.build([...this.dag.getAllNodes().map((n) => n.issue), fetchedIssue]);
+            node = this.dag.getNode(priorityIssueNum);
+          }
+        } catch {
+          // If fetch fails, skip
+        }
+      }
+
+      if (node) {
+        const runnerName = this.runnerFacade.resolveRunnerName(
+          node.issue,
+          this.config.runner,
+        );
+        const isAllowed = this.runnerFacade.isProviderAllowed(runnerName);
+        if (!isAllowed || this.quotaMonitor.isRunnerPaused(runnerName)) {
+          continue;
+        }
+
+        this.manualPriorityQueue = this.manualPriorityQueue.filter((n) => n !== priorityIssueNum);
+        this.activeTaskNumbers.add(priorityIssueNum);
+        availableSlots--;
+
+        this.executeTask(node, undefined, 0).finally(() => {
+          this.activeTaskNumbers.delete(node!.issue.number);
+          this.dashboard.removeWorker(node!.issue.number);
+        });
+      }
+    }
+
+    if (availableSlots <= 0) {
+      return;
+    }
+
+    // 6b. Standard DAG Ready Nodes Scheduling (with Runner Quota Filtering)
+    const readyNodes = this.dag.getReadyNodes();
     const unpausedNodes = readyNodes.filter((node) => {
       const runnerName = this.runnerFacade.resolveRunnerName(
         node.issue,
@@ -409,12 +481,8 @@ export class Orchestrator implements RemoteActionController {
       return isAllowed && !this.quotaMonitor.isRunnerPaused(runnerName);
     });
 
-    if (unpausedNodes.length === 0) {
-      return;
-    }
-
     const tasksToDispatch = unpausedNodes
-      .filter((n) => !this.activeTaskNumbers.has(n.issue.number))
+      .filter((n) => !this.activeTaskNumbers.has(n.issue.number) && !this.manualPriorityQueue.includes(n.issue.number))
       .slice(0, availableSlots);
 
     for (const node of tasksToDispatch) {
@@ -548,18 +616,18 @@ export class Orchestrator implements RemoteActionController {
         } catch {
           // Comment failure is non-fatal
         }
-      } else if (isContinuation) {
-        try {
-          await this.gh.editIssueLabels(issue.number, {
-            add: [this.config.labels.readyForAgent],
-            remove: [
-              this.config.labels.readyForHuman,
-              this.config.labels.needsInfo,
-            ],
-          });
-        } catch {
-          // Best effort
-        }
+      }
+
+      try {
+        await this.gh.editIssueLabels(issue.number, {
+          add: [this.config.labels.readyForAgent],
+          remove: [
+            this.config.labels.readyForHuman,
+            this.config.labels.needsInfo,
+          ].filter(Boolean),
+        });
+      } catch {
+        // Best effort
       }
 
       // 3. Check user feedback for continuation
@@ -1180,9 +1248,13 @@ ${autoMergeStep}
   public async resumeWorker(
     issueNumber: number,
   ): Promise<{ success: boolean; message: string }> {
+    const worker = this.dashboard.getActiveWorkers().get(issueNumber);
+    const runnerName = worker?.runnerName || this.config.runner;
+    if (runnerName && this.quotaMonitor.isRunnerPaused(runnerName)) {
+      this.quotaMonitor.resumeFromQuota(runnerName, true);
+    }
     const resumed = this.runnerFacade.resume(issueNumber);
     if (resumed) {
-      const worker = this.dashboard.getActiveWorkers().get(issueNumber);
       if (worker) {
         worker.status = "running";
         this.dashboard.updateWorker(worker);
@@ -1312,7 +1384,7 @@ ${autoMergeStep}
   }
 
   public resumeQuota(runner?: string): void {
-    this.quotaMonitor.resumeFromQuota(runner);
+    this.quotaMonitor.resumeFromQuota(runner, true);
     this.stateMgr.updateDaemonStatus("running");
     const runnerStr = runner ? ` for runner ${runner}` : "";
     this.dashboard.log(
@@ -1349,6 +1421,134 @@ ${autoMergeStep}
     issueNumber: number,
   ): Promise<{ success: boolean; message: string }> {
     return await this.resumeWorker(issueNumber);
+  }
+
+  public async enqueueTask(
+    issueNumber: number,
+    options?: EnqueueTaskOptions,
+  ): Promise<EnqueueResult> {
+    const force = options?.force ?? false;
+
+    // 1. Check if already active
+    if (this.activeTaskNumbers.has(issueNumber)) {
+      return {
+        success: false,
+        message: `Issue #${issueNumber} is already actively running.`,
+      };
+    }
+
+    // 2. Check if already in priority queue
+    if (this.manualPriorityQueue.includes(issueNumber)) {
+      return {
+        success: false,
+        message: `Issue #${issueNumber} is already in the priority queue.`,
+      };
+    }
+
+    // 3. Locate node in DAG or fetch from GitHub
+    let node = this.dag.getNode(issueNumber);
+    if (!node) {
+      try {
+        const fetchedIssue = await this.gh.fetchIssue(issueNumber);
+        if (fetchedIssue) {
+          const currentIssues = this.dag.getAllNodes().map((n) => n.issue);
+          this.dag.build([...currentIssues, fetchedIssue]);
+          node = this.dag.getNode(issueNumber);
+        }
+      } catch (err: any) {
+        return {
+          success: false,
+          message: `Failed to fetch Issue #${issueNumber} from GitHub: ${err?.message || err}`,
+        };
+      }
+    }
+
+    if (!node) {
+      return {
+        success: false,
+        message: `Issue #${issueNumber} not found on GitHub.`,
+      };
+    }
+
+    // 4. Check if issue is closed
+    if (node.issue.state === "CLOSED" && !force) {
+      return {
+        success: false,
+        message: `Issue #${issueNumber} is closed. Pass --force to enqueue anyway.`,
+        requiresConfirmation: true,
+        isClosed: true,
+      };
+    }
+
+    // 5. Check if issue is a spec with child tickets
+    const childIds = this.dag.getSpecChildIssueNumbers(issueNumber);
+    const isSpec = node.kind === "spec" || childIds.length > 0;
+
+    if (isSpec && childIds.length > 0) {
+      if (!force) {
+        return {
+          success: false,
+          message: `Issue #${issueNumber} is a spec with child tickets (#${childIds.join(
+            ", #",
+          )}). Enqueue all child tickets into the priority queue?`,
+          requiresConfirmation: true,
+          isSpec: true,
+          childNumbers: childIds,
+        };
+      }
+
+      let addedCount = 0;
+      for (const childId of childIds) {
+        if (!this.manualPriorityQueue.includes(childId) && !this.activeTaskNumbers.has(childId)) {
+          this.manualPriorityQueue.push(childId);
+          addedCount++;
+        }
+      }
+
+      this.dashboard.log(
+        `Priority enqueued ${addedCount} child ticket(s) for Spec #${issueNumber}: ${childIds
+          .map((id) => `#${id}`)
+          .join(", ")}`,
+      );
+      this.tick().catch(() => {});
+
+      return {
+        success: true,
+        message: `Enqueued ${addedCount} child ticket(s) for Spec #${issueNumber} into priority queue.`,
+        childNumbers: childIds,
+        isSpec: true,
+      };
+    }
+
+    // 6. Check open blockers
+    const openBlockers: number[] = [];
+    for (const blockerId of node.blockers) {
+      const blockerNode = this.dag.getNode(blockerId);
+      if (!blockerNode || blockerNode.issue.state === "OPEN") {
+        openBlockers.push(blockerId);
+      }
+    }
+
+    if (openBlockers.length > 0 && !force) {
+      return {
+        success: false,
+        message: `Issue #${issueNumber} is blocked by open issue(s): #${openBlockers.join(
+          ", #"
+        )}. Pass --force to enqueue anyway.`,
+        requiresConfirmation: true,
+        blockerNumbers: openBlockers,
+      };
+    }
+
+    // 7. Add to manual priority queue
+    this.manualPriorityQueue.push(issueNumber);
+    this.dashboard.log(`Priority enqueued Issue #${issueNumber}: ${node.issue.title}`);
+    this.tick().catch(() => {});
+
+    return {
+      success: true,
+      message: `Enqueued Issue #${issueNumber} into priority queue.`,
+    };
   }
 
   public getStatusSummary(): StatusSummary {
@@ -1427,14 +1627,30 @@ ${autoMergeStep}
 
     const readyNodes = this.dag.getReadyNodes();
     const activeIds = new Set(this.activeTaskNumbers);
-    const queued: TaskItemSummary[] = readyNodes
-      .filter((n) => !activeIds.has(n.issue.number))
+    const prioritySet = new Set(this.manualPriorityQueue);
+
+    const priorityItems: TaskItemSummary[] = this.manualPriorityQueue
+      .filter((num) => !activeIds.has(num))
+      .map((num) => {
+        const node = this.dag.getNode(num);
+        return {
+          issueNumber: num,
+          title: node?.issue?.title || `Issue #${num}`,
+          runnerName: node?.runnerName,
+          status: "ready",
+        };
+      });
+
+    const standardQueued: TaskItemSummary[] = readyNodes
+      .filter((n) => !activeIds.has(n.issue.number) && !prioritySet.has(n.issue.number))
       .map((n) => ({
         issueNumber: n.issue.number,
         title: n.issue.title,
         runnerName: n.runnerName,
         status: "ready",
       }));
+
+    const queued = [...priorityItems, ...standardQueued];
 
     return {
       inProgress,
@@ -1499,9 +1715,26 @@ ${autoMergeStep}
       issueNumber = active[0];
     }
 
-    const worktreePath = this.worktreeMgr.getWorktreePathForIssue(issueNumber);
-    const parts: string[] = [`*Issue #${issueNumber}*`];
+    const node = this.dag.getNode(issueNumber);
+    const title = node?.issue.title;
+    const parts: string[] = [title ? `*Issue #${issueNumber}: ${title}*` : `*Issue #${issueNumber}*`];
 
+    const isPriorityQueued = this.manualPriorityQueue.includes(issueNumber);
+    const isActive = this.activeTaskNumbers.has(issueNumber);
+
+    if (isActive) {
+      parts.push(`• Status: \`running\``);
+    } else if (isPriorityQueued) {
+      parts.push(`• Status: \`priority-enqueued\``);
+    } else if (node) {
+      parts.push(`• Status: \`queued\``);
+    }
+
+    if (node && node.blockers.length > 0) {
+      parts.push(`• Blocked by: ${node.blockers.map((b) => `#${b}`).join(", ")}`);
+    }
+
+    const worktreePath = this.worktreeMgr.getWorktreePathForIssue(issueNumber);
     if (fs.existsSync(worktreePath)) {
       parts.push(`• Worktree: \`${worktreePath}\``);
       try {
@@ -1517,17 +1750,27 @@ ${autoMergeStep}
         parts.push("• Unable to retrieve git diff.");
       }
     } else {
-      parts.push(`• No active worktree found at \`${worktreePath}\`.`);
+      parts.push(`• Worktree: No active worktree on disk.`);
     }
 
     const session = this.stateMgr.getSession(issueNumber);
     if (session?.metadata) {
-      parts.push(`• Status: \`${session.metadata.status}\``);
+      if (!isActive && !isPriorityQueued && !node) {
+        parts.push(`• Status: \`${session.metadata.status}\``);
+      }
       if (session.metadata.runner) {
         parts.push(`• Runner: \`${session.metadata.runner}\``);
       }
       if (session.metadata.branchName) {
         parts.push(`• Branch: \`${session.metadata.branchName}\``);
+      }
+    }
+
+    const events = this.eventBus.getHistory(issueNumber);
+    if (events.length > 0) {
+      parts.push("\n*Latest Activity in Live Tail*:");
+      for (const e of events.slice(-5)) {
+        parts.push(`• [${e.timestamp}] ${e.summary}`);
       }
     }
 
@@ -1562,6 +1805,53 @@ ${autoMergeStep}
     return lines.join("\n");
   }
 
+  public async getLiveTailReport(
+    issueNumber: number,
+    sinceTimestamp?: number,
+  ): Promise<{
+    issueNumber: number;
+    status?: string;
+    branchName?: string;
+    runnerName?: string;
+    events: Array<{ timestamp: string; summary: string; type: string }>;
+    diffStat?: string;
+  }> {
+    const history = this.eventBus.getHistory(issueNumber);
+    const recentEvents = sinceTimestamp
+      ? history.filter((e) => {
+          const ts = parseInt(e.id.split("-")[0], 10);
+          return isNaN(ts) || ts >= sinceTimestamp;
+        })
+      : history.slice(-10);
+
+    const session = this.stateMgr.getSession(issueNumber);
+    const worker = this.dashboard.getActiveWorkers().get(issueNumber);
+
+    let diffStat: string | undefined;
+    const worktreePath = this.worktreeMgr.getWorktreePathForIssue(issueNumber);
+    if (fs.existsSync(worktreePath)) {
+      try {
+        const { stdout } = await execa("git", ["diff", "--stat"], { cwd: worktreePath });
+        if (stdout.trim()) {
+          diffStat = stdout.trim();
+        }
+      } catch {}
+    }
+
+    return {
+      issueNumber,
+      status: worker?.status || session?.metadata?.status || (this.activeTaskNumbers.has(issueNumber) ? "running" : "idle"),
+      branchName: worker?.branchName || session?.metadata?.branchName,
+      runnerName: worker?.runnerName || session?.metadata?.runner || this.config.runner,
+      events: recentEvents.map((e) => ({
+        timestamp: e.timestamp,
+        summary: e.summary,
+        type: e.type,
+      })),
+      diffStat,
+    };
+  }
+
   public async getDetectedProviders(): Promise<ProviderInfo[]> {
     return detectInstalledProviders(
       this.config,
@@ -1575,10 +1865,37 @@ ${autoMergeStep}
   ): Promise<{ success: boolean; message: string; savedPath: string }> {
     this.config.allowedProviders = allowedProviders;
     this.runnerFacade.setAllowedProviders(allowedProviders);
+    this.quotaMonitor.setOptions({ allowedProviders });
 
     if (defaultRunner) {
       this.config.runner = defaultRunner;
       this.runnerFacade.setDefaultRunner(defaultRunner);
+    }
+
+    // 1. Update runner assignment on DAG nodes
+    if (this.dag) {
+      this.dag.updateRunnerConfig(this.config);
+    }
+
+    // 2. Unpause quota and resume frozen workers for newly allowed providers
+    for (const provider of allowedProviders) {
+      if (this.quotaMonitor.isRunnerPaused(provider)) {
+        this.quotaMonitor.resumeFromQuota(provider, true);
+      }
+    }
+
+    if (this.stateMgr.getDaemonStatus() === "paused_quota") {
+      this.stateMgr.updateDaemonStatus("running");
+    }
+
+    for (const worker of this.dashboard.getActiveWorkers().values()) {
+      const runnerName = worker.runnerName || this.config.runner;
+      if (
+        worker.status === "paused_quota" &&
+        allowedProviders.map((p) => p.toLowerCase()).includes(runnerName.toLowerCase())
+      ) {
+        await this.resumeWorker(worker.issueNumber);
+      }
     }
 
     const savedPath = saveConfig({
@@ -1591,8 +1908,11 @@ ${autoMergeStep}
       this.config.repository || "repository"
     }: ${
       allowedProviders.length > 0 ? allowedProviders.join(", ") : "none"
-    }${runnerMsg}`;
+    }${runnerMsg}. Resumed tasks and telemetry for allowed runners.`;
     this.dashboard.log(msg);
+
+    // 3. Immediately trigger dispatch loop to pick up newly available tasks
+    this.tick().catch(() => {});
 
     return {
       success: true,

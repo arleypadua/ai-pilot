@@ -867,7 +867,10 @@ describe('RemoteControlManager', () => {
 
       expect(provider.sentMessages.length).toBe(1);
       const msg = provider.sentMessages[0];
-      expect(msg.text).toContain('🔍 *Inspect Usage*');
+      expect(msg.text).toContain('🔍 *Inspect Task & Worker Sessions*');
+      expect(msg.text).toContain('`/inspect 24`');
+      expect(msg.text).toContain('`/inspect 25`');
+      expect(msg.text).toContain('`/inspect 26`');
     });
 
     it('/logs <issue> returns recent logs formatted in code block', async () => {
@@ -884,7 +887,10 @@ describe('RemoteControlManager', () => {
 
       expect(provider.sentMessages.length).toBe(1);
       const msg = provider.sentMessages[0];
-      expect(msg.text).toContain('📜 *Logs Usage*');
+      expect(msg.text).toContain('📜 *Session Logs Usage*');
+      expect(msg.text).toContain('`/logs 24`');
+      expect(msg.text).toContain('`/logs 25`');
+      expect(msg.text).toContain('`/logs 26`');
     });
   });
 });

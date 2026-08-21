@@ -5,14 +5,21 @@ import type { QuotaStatus, RunnerLiveUsage } from '../../quota/types.js';
 interface UsageViewProps {
   quotaStatus: QuotaStatus | null;
   repository?: string;
+  allowedProviders?: string[];
   isRefreshing?: boolean;
 }
 
 export const UsageView: React.FC<UsageViewProps> = ({
   quotaStatus,
   repository,
+  allowedProviders,
   isRefreshing = false,
 }) => {
+  const isRunnerAllowed = (runnerName: string) => {
+    if (!allowedProviders || allowedProviders.length === 0) return true;
+    return allowedProviders.map((p) => p.toLowerCase()).includes(runnerName.toLowerCase());
+  };
+
   const renderProgressBar = (pct: number, length: number = 20) => {
     const filled = Math.min(length, Math.max(0, Math.round((pct / 100) * length)));
     const empty = Math.max(0, length - filled);
@@ -69,6 +76,10 @@ export const UsageView: React.FC<UsageViewProps> = ({
     );
   };
 
+  const allowedRunnerUsages = runnerUsage && Object.keys(runnerUsage).length > 0
+    ? Object.values(runnerUsage).filter((r) => isRunnerAllowed(r.runnerName))
+    : [];
+
   return (
     <Box flexDirection="column" paddingX={1} paddingY={0}>
       {/* Header Banner */}
@@ -87,9 +98,9 @@ export const UsageView: React.FC<UsageViewProps> = ({
       </Box>
 
       {/* Runner Telemetry Cards */}
-      {runnerUsage && Object.keys(runnerUsage).length > 0 ? (
-        Object.values(runnerUsage).map(renderRunnerCard)
-      ) : quotaStatus?.liveUsage ? (
+      {allowedRunnerUsages.length > 0 ? (
+        allowedRunnerUsages.map(renderRunnerCard)
+      ) : quotaStatus?.liveUsage && isRunnerAllowed('claude') ? (
         <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1} marginBottom={1}>
           <Text bold color="cyan">
             ⚡ CLAUDE CODE CLI TELEMETRY
@@ -129,19 +140,19 @@ export const UsageView: React.FC<UsageViewProps> = ({
       <Box flexDirection="column" borderStyle="round" borderColor={isPaused ? 'yellow' : 'green'} paddingX={1} marginBottom={1}>
         <Text bold color={isPaused ? 'yellow' : 'green'}>
           {isPaused
-            ? `⏳ SCHEDULED WAKE-UP STATUS (${quotaStatus?.pausedRunner ? quotaStatus.pausedRunner.toUpperCase() + ' ' : ''}PAUSED)`
+            ? `⏳ ${quotaStatus?.pausedRunner ? quotaStatus.pausedRunner.toUpperCase() + ' ' : ''}${quotaStatus?.reason?.toLowerCase().includes('threshold') ? 'THRESHOLD LIMIT' : 'QUOTA LIMIT'} (PAUSED)`
             : '✅ WAKE-UP STATUS (HEALTHY)'}
         </Text>
         {isPaused && resetAt ? (
           <Box flexDirection="column">
             <Text color="yellow" bold>
-              Resumes at: {resetAt.toLocaleTimeString()} (~{remainingMins} min remaining)
+              Resumes automatically at: {resetAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (~{remainingMins}m) or on manual resume
             </Text>
             <Text color="gray">
               Reason: {quotaStatus?.reason || 'Runner quota limit reached'}
             </Text>
             <Text color="gray">
-              Action: Tasks using {quotaStatus?.pausedRunner || 'the paused runner'} are queued/suspended until reset time. Tasks using unpaused runners continue executing.
+              Action: Tasks using {quotaStatus?.pausedRunner || 'the paused runner'} are suspended until reset or manual resume.
             </Text>
           </Box>
         ) : (

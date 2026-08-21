@@ -114,4 +114,38 @@ describe('Orchestrator Provider Management', () => {
     expect(checkAuthSpy).toHaveBeenCalled();
     expect(ensureLabelsSpy).toHaveBeenCalledWith(config.labels);
   });
+
+  it('resumes paused quota, DAG nodes, and frozen workers when a provider is newly allowed', async () => {
+    const orchestrator = new Orchestrator({
+      ...config,
+      allowedProviders: ['claude'],
+    });
+
+    const quotaMonitor = orchestrator.getQuotaMonitor();
+    const futureReset = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    quotaMonitor.triggerQuotaPause(futureReset, 'Session limit', 'agy');
+
+    // Simulate an active worker that was paused
+    const dashboard = orchestrator.getDashboard();
+    dashboard.updateWorker({
+      issueNumber: 42,
+      title: 'AGY Task',
+      branchName: 'agent/issue-42',
+      status: 'paused_quota',
+      runnerName: 'agy',
+    });
+
+    const resumeWorkerSpy = vi.spyOn(orchestrator, 'resumeWorker').mockResolvedValue({
+      success: true,
+      message: 'Resumed',
+    });
+    const tickSpy = vi.spyOn(orchestrator, 'tick').mockResolvedValue();
+
+    // Now enable agy as allowed provider
+    await orchestrator.setAllowedProviders(['claude', 'agy'], 'agy');
+
+    expect(quotaMonitor.isRunnerPaused('agy')).toBe(false);
+    expect(resumeWorkerSpy).toHaveBeenCalledWith(42);
+    expect(tickSpy).toHaveBeenCalled();
+  });
 });

@@ -43,7 +43,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
   // Category Issues View State
   const [selectedCategory, setSelectedCategory] = useState<'specs' | 'ready' | 'waiting' | 'blocked'>('ready');
   const [categoryItemIndex, setCategoryItemIndex] = useState(0);
-  const [confirmAction, setConfirmAction] = useState<{ type: 'kill' | 'pause'; issueNumber: number } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ type: 'kill' | 'pause' | 'enqueue'; issueNumber: number; message?: string } | null>(null);
   const [categoryStatusMessage, setCategoryStatusMessage] = useState<string | undefined>(undefined);
 
   // Command Palette State
@@ -309,13 +309,84 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
     }
 
     if (cmd === '/resume' || cmd === 'resume') {
-      orchestrator.getQuotaMonitor().resumeFromQuota();
+      orchestrator.resumeQuota();
       orchestrator.tick().catch(() => {});
       setCommandResult({
         type: 'success',
         title: '🔄 Quota Pause Cleared',
         lines: ['Cleared quota pause state. Workers resuming...'],
       });
+      return;
+    }
+
+    if (
+      cmd.startsWith('/enqueue') ||
+      cmd.startsWith('enqueue') ||
+      cmd.startsWith('/run') ||
+      cmd.startsWith('run') ||
+      cmd.startsWith('/dispatch') ||
+      cmd.startsWith('dispatch') ||
+      cmd.startsWith('/force-run') ||
+      cmd.startsWith('force-run')
+    ) {
+      const parts = rawCmd.trim().split(/\s+/);
+      const args = parts.slice(1);
+      const force =
+        args.some((a) => a === '--force' || a === '-f') ||
+        parts[0] === '/force-run' ||
+        parts[0] === 'force-run';
+      const issueArg = args.find((a) => a !== '--force' && a !== '-f');
+
+      if (!issueArg) {
+        setCommandResult({
+          type: 'error',
+          title: '⚠️ Missing Issue Number',
+          lines: ['Usage: /enqueue <issueNumber> [--force] (e.g. /enqueue 42 or /run 42 --force)'],
+        });
+        return;
+      }
+
+      const issueNum = parseInt(issueArg.replace(/^#/, ''), 10);
+      if (isNaN(issueNum)) {
+        setCommandResult({
+          type: 'error',
+          title: '⚠️ Invalid Issue Number',
+          lines: [`"${issueArg}" is not a valid issue number.`],
+        });
+        return;
+      }
+
+      try {
+        const res = await orchestrator.enqueueTask(issueNum, { force });
+        if (res.requiresConfirmation && !force) {
+          setCommandResult({
+            type: 'info',
+            title: '⚠️ Confirmation Required',
+            lines: [
+              res.message,
+              `Pass --force to bypass confirmation: /enqueue ${issueNum} --force`,
+            ],
+          });
+        } else if (res.success) {
+          setCommandResult({
+            type: 'success',
+            title: '⚡ Priority Enqueued',
+            lines: [res.message],
+          });
+        } else {
+          setCommandResult({
+            type: 'error',
+            title: '❌ Enqueue Failed',
+            lines: [res.message],
+          });
+        }
+      } catch (err: any) {
+        setCommandResult({
+          type: 'error',
+          title: '❌ Enqueue Error',
+          lines: [err?.message || 'Unknown error occurred while enqueuing task.'],
+        });
+      }
       return;
     }
 
@@ -600,6 +671,27 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
         return;
       }
 
+      if (confirmAction && confirmAction.type === 'enqueue') {
+        if (input === 'y' || input === 'Y') {
+          const issueNum = confirmAction.issueNumber;
+          setConfirmAction(null);
+          setCategoryStatusMessage(`⏳ Enqueuing Issue #${issueNum}...`);
+          orchestrator.enqueueTask(issueNum, { force: true }).then((res) => {
+            setCategoryStatusMessage(res.success ? `✓ ${res.message}` : `❌ ${res.message}`);
+            setTimeout(() => setCategoryStatusMessage(undefined), 5000);
+          });
+          return;
+        }
+
+        if (input === 'n' || input === 'N' || key.escape) {
+          setConfirmAction(null);
+          setCategoryStatusMessage('Enqueue action cancelled.');
+          setTimeout(() => setCategoryStatusMessage(undefined), 2000);
+          return;
+        }
+        return;
+      }
+
       if (key.escape) {
         setView('dashboard');
         setCategoryStatusMessage(undefined);
@@ -614,6 +706,27 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
 
       if (key.downArrow || input === 'j') {
         setCategoryItemIndex((prev) => Math.min(Math.max(0, issues.length - 1), prev + 1));
+        return;
+      }
+
+      if (input === 'e') {
+        if (currentItem) {
+          orchestrator.enqueueTask(currentItem.issue.number, { force: false }).then((res) => {
+            if (res.requiresConfirmation) {
+              setConfirmAction({
+                type: 'enqueue',
+                issueNumber: currentItem.issue.number,
+                message: res.message,
+              });
+            } else {
+              setCategoryStatusMessage(res.success ? `✓ ${res.message}` : `❌ ${res.message}`);
+              setTimeout(() => setCategoryStatusMessage(undefined), 5000);
+            }
+          }).catch((err) => {
+            setCategoryStatusMessage(`❌ ${err?.message || 'Failed to enqueue task'}`);
+            setTimeout(() => setCategoryStatusMessage(undefined), 5000);
+          });
+        }
         return;
       }
 
@@ -1050,6 +1163,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
       <UsageView
         quotaStatus={quotaStatus}
         repository={config.repository}
+        allowedProviders={config.allowedProviders || config.allowedRunners}
         isRefreshing={isRefreshingUsage}
       />
     );

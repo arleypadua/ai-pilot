@@ -1,12 +1,9 @@
 import { EventEmitter } from 'node:events';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import {
   DEFAULT_RESET_BUFFER_MS,
   type ClaudeLiveUsage,
+  type QuotaMonitorOptions,
   type QuotaStatus,
-  type RollingWindowStats,
   type RunnerLiveUsage,
   type RunnerPauseInfo,
   type UsageProvider,
@@ -28,15 +25,85 @@ export class QuotaMonitor extends EventEmitter {
   private providers: Map<string, UsageProvider> = new Map();
   private runnerUsages: Map<string, RunnerLiveUsage> = new Map();
   private pausedRunners: Map<string, RunnerPauseInfo> = new Map();
+  private overriddenRunners: Map<string, Date | undefined> = new Map();
   private claudeProvider: ClaudeUsageProvider;
   private agyProvider: AgyUsageProvider;
+  private options: QuotaMonitorOptions;
 
-  constructor() {
+  constructor(options: QuotaMonitorOptions = {}) {
     super();
+    this.options = {
+      pauseOnLimit: options.pauseOnLimit ?? true,
+      utilizationThresholdLimit:
+        options.utilizationThresholdLimit ?? options.utilizationThreshold ?? 0.85,
+      allowedProviders: options.allowedProviders,
+    };
     this.claudeProvider = new ClaudeUsageProvider();
     this.agyProvider = new AgyUsageProvider();
     this.registerProvider(this.claudeProvider);
     this.registerProvider(this.agyProvider);
+  }
+
+  public setOptions(options: Partial<QuotaMonitorOptions>): void {
+    this.options = {
+      ...this.options,
+      ...options,
+      utilizationThresholdLimit:
+        options.utilizationThresholdLimit ??
+        options.utilizationThreshold ??
+        this.options.utilizationThresholdLimit ??
+        0.85,
+      allowedProviders:
+        options.allowedProviders !== undefined
+          ? options.allowedProviders
+          : this.options.allowedProviders,
+    };
+  }
+
+  public getOptions(): QuotaMonitorOptions {
+    return { ...this.options };
+  }
+
+  public isRunnerAllowed(runnerName: string): boolean {
+    const allowed = this.options.allowedProviders;
+    if (!allowed || allowed.length === 0) return true;
+    return allowed.map((p) => p.toLowerCase()).includes(runnerName.toLowerCase());
+  }
+
+  public isRunnerOverridden(runnerName: string): boolean {
+    const rName = runnerName.toLowerCase();
+    const until = this.overriddenRunners.get(rName);
+    if (until === undefined && !this.overriddenRunners.has(rName)) {
+      return false;
+    }
+    if (until && Date.now() >= until.getTime()) {
+      this.overriddenRunners.delete(rName);
+      return false;
+    }
+    return true;
+  }
+
+  public setRunnerOverride(runnerName?: string, override: boolean = true, until?: Date): void {
+    if (runnerName) {
+      const rName = runnerName.toLowerCase();
+      if (override) {
+        this.overriddenRunners.set(rName, until);
+      } else {
+        this.overriddenRunners.delete(rName);
+      }
+    } else {
+      if (override) {
+        for (const name of this.providers.keys()) {
+          this.overriddenRunners.set(name.toLowerCase(), until);
+        }
+      } else {
+        this.overriddenRunners.clear();
+      }
+    }
+  }
+
+  public clearRunnerOverrides(): void {
+    this.overriddenRunners.clear();
   }
 
   public registerProvider(provider: UsageProvider): void {
@@ -165,6 +232,9 @@ export class QuotaMonitor extends EventEmitter {
     bufferMs: number = DEFAULT_RESET_BUFFER_MS
   ): void {
     const rName = runnerName.toLowerCase();
+    if (!this.isRunnerAllowed(rName)) {
+      return;
+    }
     const effectiveResetAt = new Date(resetAt.getTime() + bufferMs);
     const existing = this.pausedRunners.get(rName);
 
@@ -221,8 +291,14 @@ export class QuotaMonitor extends EventEmitter {
     }, waitMs);
   }
 
-  public resumeFromQuota(runnerName?: string): void {
+  public resumeFromQuota(runnerName?: string, isManual: boolean = false): void {
     const targetRunner = runnerName ? runnerName.toLowerCase() : undefined;
+
+    if (isManual) {
+      const pauseInfo = targetRunner ? this.pausedRunners.get(targetRunner) : undefined;
+      const until = pauseInfo?.resetAt || this.resetAt;
+      this.setRunnerOverride(targetRunner, true, until);
+    }
 
     if (targetRunner) {
       this.pausedRunners.delete(targetRunner);
@@ -264,102 +340,6 @@ export class QuotaMonitor extends EventEmitter {
     }
   }
 
-  public scanRollingWindowUsage(
-    utilizationThreshold: number = 0.85,
-    customCeiling?: number
-  ): RollingWindowStats {
-    const fiveHoursMs = 5 * 60 * 60 * 1000;
-    const windowStart = Date.now() - fiveHoursMs;
-    const thirtyMinsAgo = Date.now() - 30 * 60 * 1000;
-    const oneHourFromNow = Date.now() + 60 * 60 * 1000;
-
-    let totalInput = 0;
-    let totalOutput = 0;
-    let totalCacheRead = 0;
-    let totalCacheCreate = 0;
-    let recentTokens = 0;
-    let tokensExpiringNextHour = 0;
-    let earliestTurnTimestamp: number | undefined = undefined;
-    let turnsCount = 0;
-
-    try {
-      const claudeDir = path.join(os.homedir(), '.claude', 'projects');
-      if (fs.existsSync(claudeDir)) {
-        const scanDir = (dir: string) => {
-          const entries = fs.readdirSync(dir, { withFileTypes: true });
-          for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-              scanDir(fullPath);
-            } else if (entry.name.endsWith('.jsonl')) {
-              try {
-                const stat = fs.statSync(fullPath);
-                if (stat.mtimeMs >= windowStart) {
-                  const content = fs.readFileSync(fullPath, 'utf8');
-                  const lines = content.split('\n');
-                  for (const line of lines) {
-                    if (!line.trim()) continue;
-                    try {
-                      const data = JSON.parse(line);
-                      if (data.timestamp && data.message?.usage) {
-                        const ts = new Date(data.timestamp).getTime();
-                        if (ts >= windowStart) {
-                          const u = data.message.usage;
-                          const output = u.output_tokens || 0;
-                          totalInput += u.input_tokens || 0;
-                          totalOutput += output;
-                          totalCacheRead += u.cache_read_input_tokens || 0;
-                          totalCacheCreate += u.cache_creation_input_tokens || 0;
-                          turnsCount++;
-
-                          if (!earliestTurnTimestamp || ts < earliestTurnTimestamp) {
-                            earliestTurnTimestamp = ts;
-                          }
-
-                          if (ts >= thirtyMinsAgo) {
-                            recentTokens += output;
-                          }
-
-                          const rollOffTime = ts + fiveHoursMs;
-                          if (rollOffTime <= oneHourFromNow) {
-                            tokensExpiringNextHour += output;
-                          }
-                        }
-                      }
-                    } catch {}
-                  }
-                }
-              } catch {}
-            }
-          }
-        };
-
-        scanDir(claudeDir);
-      }
-    } catch {}
-
-    const estimatedCeiling = customCeiling || 300000;
-    const utilization = Math.min(1.0, totalOutput / estimatedCeiling);
-    const isApproachingLimit = utilization >= utilizationThreshold;
-    const nextRollOffAt = earliestTurnTimestamp ? new Date(earliestTurnTimestamp + fiveHoursMs) : undefined;
-    const burnRatePerMinute = Math.round(recentTokens / 30);
-
-    return {
-      turnsCount,
-      totalOutputTokens: totalOutput,
-      totalInputTokens: totalInput,
-      totalCacheReadTokens: totalCacheRead,
-      totalCacheCreateTokens: totalCacheCreate,
-      earliestTurnTimestamp,
-      nextRollOffAt,
-      tokensExpiringInNextHour: tokensExpiringNextHour,
-      burnRatePerMinute,
-      estimatedCeiling,
-      utilization,
-      isApproachingLimit,
-    };
-  }
-
   public async fetchLiveUsage(forceRefresh = false): Promise<ClaudeLiveUsage | null> {
     for (const [name, provider] of this.providers.entries()) {
       try {
@@ -378,34 +358,70 @@ export class QuotaMonitor extends EventEmitter {
       }
     }
 
+    const rawThreshold = this.options.utilizationThresholdLimit ?? 0.85;
+    const thresholdPercent = rawThreshold <= 1.0 ? Math.round(rawThreshold * 100) : Math.round(rawThreshold);
+    const shouldPauseOnLimit = this.options.pauseOnLimit !== false;
+
     const claudeLive = (await this.claudeProvider.isAvailable()) ? this.claudeProvider.getCachedLiveUsage() : null;
 
-    // Check if Claude 5h limit is reached
-    if (claudeLive && claudeLive.sessionUsedPercentage >= 100 && claudeLive.sessionResetAt) {
-      if (!this.isRunnerPaused('claude')) {
-        this.triggerQuotaPause(claudeLive.sessionResetAt, `Claude Live Session Quota: 100% used (resets ${claudeLive.sessionResetText})`, 'claude');
-      }
-    } else if (this.isRunnerPaused('claude')) {
-      const pauseInfo = this.pausedRunners.get('claude');
-      const resetPassed = pauseInfo ? Date.now() >= pauseInfo.resetAt.getTime() : true;
-      if (resetPassed) {
-        this.resumeFromQuota('claude');
+    // Check if Claude quota threshold is reached
+    if (this.isRunnerAllowed('claude') && claudeLive && shouldPauseOnLimit) {
+      const isOverLimit = claudeLive.sessionUsedPercentage >= thresholdPercent;
+      if (isOverLimit) {
+        if (!this.isRunnerOverridden('claude')) {
+          const resetAt = claudeLive.sessionResetAt || new Date(Date.now() + 60 * 60 * 1000);
+          if (!this.isRunnerPaused('claude')) {
+            this.triggerQuotaPause(
+              resetAt,
+              `Claude Live Session Quota: ${claudeLive.sessionUsedPercentage}% used (threshold: ${thresholdPercent}%, resets ${claudeLive.sessionResetText || 'soon'})`,
+              'claude'
+            );
+          }
+        }
+      } else {
+        this.overriddenRunners.delete('claude');
+        if (this.isRunnerPaused('claude')) {
+          const pauseInfo = this.pausedRunners.get('claude');
+          const resetPassed = pauseInfo ? Date.now() >= pauseInfo.resetAt.getTime() : true;
+          const newWindowBegan =
+            claudeLive.sessionResetAt && pauseInfo
+              ? claudeLive.sessionResetAt.getTime() > pauseInfo.resetAt.getTime()
+              : false;
+
+          if (resetPassed || newWindowBegan) {
+            this.resumeFromQuota('claude');
+          }
+        }
       }
     }
 
-    // Check if AGY 5h limit is reached
+    // Check if AGY quota threshold is reached
     const agyUsage = this.runnerUsages.get('agy');
-    if (agyUsage) {
-      const fiveHourBucket = agyUsage.buckets.find((b) => b.windowType === 'five_hour' && b.usedPercentage >= 100);
-      if (fiveHourBucket && fiveHourBucket.resetAt) {
-        if (!this.isRunnerPaused('agy')) {
-          this.triggerQuotaPause(fiveHourBucket.resetAt, `AGY Quota: 100% used for ${fiveHourBucket.name}`, 'agy');
+    if (this.isRunnerAllowed('agy') && agyUsage && shouldPauseOnLimit) {
+      const limitingBucket = agyUsage.buckets.find((b) => b.usedPercentage >= thresholdPercent);
+      if (limitingBucket) {
+        if (!this.isRunnerOverridden('agy')) {
+          const resetAt = limitingBucket.resetAt || new Date(Date.now() + 60 * 60 * 1000);
+          if (!this.isRunnerPaused('agy')) {
+            this.triggerQuotaPause(
+              resetAt,
+              `AGY Quota: ${limitingBucket.usedPercentage}% used (threshold: ${thresholdPercent}%) for ${limitingBucket.name}`,
+              'agy'
+            );
+          }
         }
-      } else if (this.isRunnerPaused('agy')) {
-        const pauseInfo = this.pausedRunners.get('agy');
-        const resetPassed = pauseInfo ? Date.now() >= pauseInfo.resetAt.getTime() : true;
-        if (resetPassed) {
-          this.resumeFromQuota('agy');
+      } else {
+        this.overriddenRunners.delete('agy');
+        if (this.isRunnerPaused('agy')) {
+          const pauseInfo = this.pausedRunners.get('agy');
+          const resetPassed = pauseInfo ? Date.now() >= pauseInfo.resetAt.getTime() : true;
+          const newWindowBegan =
+            pauseInfo &&
+            agyUsage.buckets.some((b) => b.resetAt && b.resetAt.getTime() > pauseInfo.resetAt.getTime());
+
+          if (resetPassed || newWindowBegan) {
+            this.resumeFromQuota('agy');
+          }
         }
       }
     }
@@ -413,8 +429,7 @@ export class QuotaMonitor extends EventEmitter {
     return claudeLive;
   }
 
-  public getStatus(utilizationThreshold: number = 0.85, customCeiling?: number): QuotaStatus {
-    const rollingStats = this.scanRollingWindowUsage(utilizationThreshold, customCeiling);
+  public getStatus(): QuotaStatus {
     const runnerUsageRecord: Record<string, RunnerLiveUsage> = {};
     for (const [key, value] of this.runnerUsages.entries()) {
       runnerUsageRecord[key] = value;
@@ -427,6 +442,7 @@ export class QuotaMonitor extends EventEmitter {
 
     const pausedKeys = Array.from(this.pausedRunners.keys());
     const pausedRunner = pausedKeys.length > 0 ? pausedKeys.join(', ') : undefined;
+    const overriddenRunners = Array.from(this.overriddenRunners.keys());
 
     return {
       isPaused: this.pausedRunners.size > 0,
@@ -435,8 +451,8 @@ export class QuotaMonitor extends EventEmitter {
       reason: this.pauseReason,
       pausedRunner,
       pausedRunners: Object.keys(pausedRunnersRecord).length > 0 ? pausedRunnersRecord : undefined,
+      overriddenRunners: overriddenRunners.length > 0 ? overriddenRunners : undefined,
       activePids: Array.from(this.activePids.keys()),
-      rollingStats,
       liveUsage: this.claudeProvider.getCachedLiveUsage() || undefined,
       runnerUsage: Object.keys(runnerUsageRecord).length > 0 ? runnerUsageRecord : undefined,
     };

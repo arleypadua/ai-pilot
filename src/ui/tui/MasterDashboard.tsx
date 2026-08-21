@@ -53,18 +53,25 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
   }
   const repoContext = config.repository ? ` | Repo: ${config.repository}` : '';
 
+  const configuredAllowed = config.allowedProviders || config.allowedRunners;
+  const isRunnerAllowed = (runnerName: string) => {
+    if (!configuredAllowed || configuredAllowed.length === 0) return true;
+    return configuredAllowed.map((p) => p.toLowerCase()).includes(runnerName.toLowerCase());
+  };
+
   const renderQuotaBar = () => {
     if (!quotaStatus) {
       return <Text color="green">● Quota Status: Normal</Text>;
     }
 
-    const pauseBanner = (quotaStatus.isPaused && quotaStatus.resetAt) ? (
+    const isPausedRunnerAllowed = quotaStatus.pausedRunner ? isRunnerAllowed(quotaStatus.pausedRunner) : true;
+    const pauseBanner = (quotaStatus.isPaused && quotaStatus.resetAt && isPausedRunnerAllowed) ? (
       <Box flexDirection="column" marginBottom={0}>
         <Text backgroundColor="red" color="white" bold>
-          {` ⏳ ${quotaStatus.pausedRunner ? quotaStatus.pausedRunner.toUpperCase() + ' ' : ''}5-HOUR QUOTA PAUSED `}
+          {` ⏳ ${quotaStatus.pausedRunner ? quotaStatus.pausedRunner.toUpperCase() + ' ' : ''}${quotaStatus.reason?.toLowerCase().includes('threshold') ? 'THRESHOLD LIMIT PAUSED' : 'QUOTA LIMIT PAUSED'} `}
         </Text>
         <Text color="red">
-          Resumes at {quotaStatus.resetAt.toLocaleTimeString()} (~{Math.ceil(Math.max(0, quotaStatus.resetAt.getTime() - Date.now()) / (60 * 1000))} min remaining)
+          {`Resumes automatically at ${quotaStatus.resetAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (~${Math.ceil(Math.max(0, quotaStatus.resetAt.getTime() - Date.now()) / (60 * 1000))}m) or on manual resume`}
         </Text>
       </Box>
     ) : null;
@@ -72,31 +79,39 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
     let telemetryBars: React.ReactNode = null;
 
     if (quotaStatus.runnerUsage && Object.keys(quotaStatus.runnerUsage).length > 0) {
-      telemetryBars = (
-        <Box flexDirection="column">
-          {Object.values(quotaStatus.runnerUsage).map((rUsage) => {
-            return (
-              <Box key={rUsage.runnerName} flexDirection="row" marginBottom={0}>
-                <Text bold color={rUsage.runnerName === 'agy' ? 'blue' : 'cyan'}>
-                  {`● ${rUsage.displayName}: `}
-                </Text>
-                {rUsage.buckets.map((b, i) => {
-                  const barLen = 8;
-                  const filled = Math.min(barLen, Math.round((b.usedPercentage / 100) * barLen));
-                  const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, barLen - filled));
-                  const color = b.usedPercentage >= 95 ? 'red' : b.usedPercentage >= 80 ? 'yellow' : 'green';
-                  return (
-                    <Text key={i} color={color}>
-                      {i > 0 ? '  ' : ''}{b.name}: [{bar}] {b.usedPercentage}%
-                    </Text>
-                  );
-                })}
-              </Box>
-            );
-          })}
-        </Box>
+      const allowedUsages = Object.values(quotaStatus.runnerUsage).filter((rUsage) =>
+        isRunnerAllowed(rUsage.runnerName)
       );
-    } else if (quotaStatus.liveUsage) {
+
+      if (allowedUsages.length > 0) {
+        telemetryBars = (
+          <Box flexDirection="column">
+            {allowedUsages.map((rUsage) => {
+              return (
+                <Box key={rUsage.runnerName} flexDirection="row" marginBottom={0}>
+                  <Text bold color={rUsage.runnerName === 'agy' ? 'blue' : 'cyan'}>
+                    {`● ${rUsage.displayName}: `}
+                  </Text>
+                  {rUsage.buckets.map((b, i) => {
+                    const barLen = 8;
+                    const filled = Math.min(barLen, Math.round((b.usedPercentage / 100) * barLen));
+                    const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, barLen - filled));
+                    const color = b.usedPercentage >= 95 ? 'red' : b.usedPercentage >= 80 ? 'yellow' : 'green';
+                    return (
+                      <Text key={i} color={color}>
+                        {i > 0 ? '  ' : ''}{b.name}: [{bar}] {b.usedPercentage}%
+                      </Text>
+                    );
+                  })}
+                </Box>
+              );
+            })}
+          </Box>
+        );
+      } else if (!pauseBanner) {
+        telemetryBars = <Text color="green">● Quota Status: Normal (headroom healthy)</Text>;
+      }
+    } else if (quotaStatus.liveUsage && isRunnerAllowed('claude')) {
       const live = quotaStatus.liveUsage;
       const sessPct = live.sessionUsedPercentage;
       const barLen = 12;

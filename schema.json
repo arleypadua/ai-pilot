@@ -163,19 +163,26 @@
     },
     "quota": {
       "type": "object",
-      "description": "5-hour rolling quota and rate limit settings",
+      "description": "Quota and rate limit settings",
       "properties": {
         "pauseOnLimit": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically pause active workers when 5h quota is exceeded"
+          "description": "Automatically pause active workers when quota threshold is reached or exceeded"
+        },
+        "utilizationThresholdLimit": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 1.0,
+          "default": 0.85,
+          "description": "Proactive quota utilization threshold to pause task execution (e.g. 0.70 for 70%)"
         },
         "utilizationThreshold": {
           "type": "number",
-          "minimum": 0.1,
+          "minimum": 0.01,
           "maximum": 1.0,
-          "default": 0.95,
-          "description": "Proactive quota threshold trigger"
+          "default": 0.85,
+          "description": "Alias for utilizationThresholdLimit"
         },
         "proxyPort": {
           "type": "integer",

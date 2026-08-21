@@ -277,7 +277,7 @@ Running `imagos init` creates `.autopilot/config.json`. You can customize it to 
   "cleanupWorktreeOnClose": true,
   "quota": {
     "pauseOnLimit": true,
-    "utilizationThreshold": 0.95
+    "utilizationThresholdLimit": 0.85
   },
   "labels": {
     "readyForAgent": "ready-for-agent",
@@ -302,7 +302,8 @@ Running `imagos init` creates `.autopilot/config.json`. You can customize it to 
 - `autoMerge`: Whether to automatically squash and merge pull requests when tests pass (defaults to `true`).
 - `mergeMethod`: Method used when merging pull requests (`squash`, `merge`, or `rebase`).
 - `cleanupWorktreeOnClose`: Whether to delete the worktree folder once an issue is closed and merged (defaults to `true`).
-- `quota.pauseOnLimit`: Whether to automatically pause task dispatch when a rate limit is reached (defaults to `true`).
+- `quota.pauseOnLimit`: Whether to automatically pause task execution when the quota threshold is reached (defaults to `true`).
+- `quota.utilizationThresholdLimit`: Proactive quota utilization threshold to pause task execution (defaults to `0.85`, e.g. `0.70` for 70%).
 - `labels`: Mapping of canonical workflow labels to custom label names if your repository uses different names.
 
 ---

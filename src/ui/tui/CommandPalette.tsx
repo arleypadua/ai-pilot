@@ -14,6 +14,11 @@ export const AVAILABLE_COMMANDS: CommandDefinition[] = [
     aliases: ['specs', '/start', 'start', '/scope', 'scope'],
   },
   {
+    name: '/enqueue',
+    description: 'Enqueue an issue into priority queue (/enqueue <num> [--force])',
+    aliases: ['enqueue', '/run', 'run', '/dispatch', 'dispatch', '/force-run'],
+  },
+  {
     name: '/logs',
     description: 'View chronological system and daemon activity logs',
     aliases: ['logs', '/activity', 'activity', '/log', 'log'],

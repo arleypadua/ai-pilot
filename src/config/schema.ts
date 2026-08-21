@@ -81,9 +81,20 @@ export const AutoPilotConfigSchema = z.object({
   quota: z
     .object({
       pauseOnLimit: z.boolean().default(true),
-      utilizationThreshold: z.number().min(0.1).max(1.0).default(0.85),
+      utilizationThresholdLimit: z.number().min(0.01).max(1.0).optional(),
+      utilizationThreshold: z.number().min(0.01).max(1.0).optional(),
       tokenCeiling: z.number().int().min(10000).optional(),
       proxyPort: z.number().int().optional().default(9876),
+    })
+    .transform((val) => {
+      const threshold = val.utilizationThresholdLimit ?? val.utilizationThreshold ?? 0.85;
+      return {
+        pauseOnLimit: val.pauseOnLimit,
+        utilizationThresholdLimit: threshold,
+        utilizationThreshold: threshold,
+        tokenCeiling: val.tokenCeiling,
+        proxyPort: val.proxyPort,
+      };
     })
     .default({}),
   labels: z

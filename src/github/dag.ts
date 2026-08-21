@@ -336,4 +336,36 @@ export class IssueDAG {
     }
     return unresolved;
   }
+
+  public updateRunnerConfig(config: Partial<AutoPilotConfig>): void {
+    if (config.runner) {
+      this.config.runner = config.runner;
+    }
+    if (config.allowedProviders !== undefined) {
+      this.config.allowedProviders = config.allowedProviders;
+    }
+    if (config.allowedRunners !== undefined) {
+      this.config.allowedRunners = config.allowedRunners;
+    }
+
+    const allowed = this.config.allowedProviders || this.config.allowedRunners;
+    for (const node of this.nodes.values()) {
+      if (node.status === 'pending' || node.status === 'blocked' || node.status === 'ready') {
+        let runnerName = this.config.runner || 'claude';
+        if (node.issue.labels) {
+          for (const label of node.issue.labels) {
+            const match = label.name.match(/^(?:runner|agent):([a-zA-Z0-9_-]+)$/i);
+            if (match && match[1]) {
+              const requested = match[1].toLowerCase();
+              if (!allowed || allowed.includes(requested)) {
+                runnerName = requested;
+              }
+              break;
+            }
+          }
+        }
+        node.runnerName = runnerName;
+      }
+    }
+  }
 }

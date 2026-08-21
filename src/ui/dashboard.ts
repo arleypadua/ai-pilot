@@ -86,18 +86,32 @@ export class Dashboard {
         `Concurrency: ${this.activeWorkers.size}/${this.config.maxConcurrency}`
     );
 
+    const configuredAllowed = this.config.allowedProviders || this.config.allowedRunners;
+    const isRunnerAllowed = (runnerName: string) => {
+      if (!configuredAllowed || configuredAllowed.length === 0) return true;
+      return configuredAllowed.map((p) => p.toLowerCase()).includes(runnerName.toLowerCase());
+    };
+
     // Quota Status Banner & Live Usage Telemetry from Claude / AGY CLI
-    if (quotaStatus.isPaused && quotaStatus.resetAt) {
+    const isPausedRunnerAllowed = quotaStatus.pausedRunner ? isRunnerAllowed(quotaStatus.pausedRunner) : true;
+    if (quotaStatus.isPaused && quotaStatus.resetAt && isPausedRunnerAllowed) {
       const remainingMs = Math.max(0, quotaStatus.resetAt.getTime() - Date.now());
       const remainingMins = Math.ceil(remainingMs / (60 * 1000));
+      const isThreshold = Boolean(quotaStatus.reason?.toLowerCase().includes('threshold'));
+      const pauseLabel = isThreshold ? 'THRESHOLD LIMIT PAUSED' : 'QUOTA LIMIT PAUSED';
+      const runnerPrefix = quotaStatus.pausedRunner ? quotaStatus.pausedRunner.toUpperCase() + ' ' : '';
+      const timeStr = quotaStatus.resetAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       console.log(
-        pc.bgRed(pc.white(pc.bold(` ⏳ ${quotaStatus.pausedRunner ? quotaStatus.pausedRunner.toUpperCase() + ' ' : ''}5-HOUR QUOTA PAUSED `))) +
-          pc.red(` Resumes at ${quotaStatus.resetAt.toLocaleTimeString()} (~${remainingMins} min remaining)`)
+        pc.bgRed(pc.white(pc.bold(` ⏳ ${runnerPrefix}${pauseLabel} `))) +
+          pc.red(` Resumes automatically at ${timeStr} (~${remainingMins}m) or on manual resume`)
       );
     }
 
     if (quotaStatus.runnerUsage && Object.keys(quotaStatus.runnerUsage).length > 0) {
-      for (const rUsage of Object.values(quotaStatus.runnerUsage)) {
+      const allowedUsages = Object.values(quotaStatus.runnerUsage).filter((rUsage) =>
+        isRunnerAllowed(rUsage.runnerName)
+      );
+      for (const rUsage of allowedUsages) {
         const header = pc.bold(pc.cyan(`● ${rUsage.displayName}:`));
         const bucketStrs = rUsage.buckets.map((b) => {
           const barLen = 10;
@@ -109,7 +123,7 @@ export class Dashboard {
         });
         console.log(`${header} ${bucketStrs.join('  •  ')}`);
       }
-    } else if (quotaStatus.liveUsage) {
+    } else if (quotaStatus.liveUsage && isRunnerAllowed('claude')) {
       const live = quotaStatus.liveUsage;
       const sessPct = live.sessionUsedPercentage;
       const barLen = 12;

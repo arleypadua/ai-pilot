@@ -21,7 +21,7 @@ interface SpecPickerViewProps {
   highlightedIndex: number;
   selectedNumbers: Set<number>;
   isAllTasksSelected: boolean;
-  confirmAction?: { type: 'kill' | 'pause'; issueNumber: number } | null;
+  confirmAction?: { type: 'kill' | 'pause' | 'enqueue'; issueNumber: number; message?: string } | null;
   statusMessage?: string;
   repository?: string;
 }

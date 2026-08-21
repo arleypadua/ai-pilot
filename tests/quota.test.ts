@@ -119,4 +119,242 @@ describe('QuotaMonitor', () => {
       expect(status.resetAt!.getTime()).toBe(rawReset.getTime() + 2 * 60 * 1000);
     });
   });
+
+  describe('utilizationThresholdLimit & pauseOnLimit', () => {
+    it('should proactively pause Claude runner when usage hits or exceeds utilizationThresholdLimit', async () => {
+      const monitor = new QuotaMonitor({
+        pauseOnLimit: true,
+        utilizationThresholdLimit: 0.7, // 70%
+      });
+
+      const provider = monitor.getProvider('claude') as any;
+      const resetTime = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      provider.fetchUsage = async () => ({
+        runnerName: 'claude',
+        displayName: 'Claude Code CLI',
+        buckets: [{ name: 'Session 5h', group: 'Claude Models', windowType: 'five_hour', usedPercentage: 74, resetAt: resetTime }],
+        lastFetchedAt: new Date(),
+      });
+      provider.isAvailable = async () => true;
+      provider.getCachedLiveUsage = () => ({
+        sessionUsedPercentage: 74,
+        sessionResetText: 'resets in 2 hours',
+        sessionResetAt: resetTime,
+        lastFetchedAt: new Date(),
+      });
+
+      const agyProvider = monitor.getProvider('agy') as any;
+      agyProvider.fetchUsage = async () => null;
+
+      await monitor.fetchLiveUsage(false);
+      expect(monitor.isRunnerPaused('claude')).toBe(true);
+
+      const status = monitor.getStatus();
+      expect(status.isPaused).toBe(true);
+      expect(status.pausedRunner).toBe('claude');
+      expect(status.reason).toContain('74% used (threshold: 70%');
+    });
+
+    it('should NOT pause Claude runner when usage is below utilizationThresholdLimit', async () => {
+      const monitor = new QuotaMonitor({
+        pauseOnLimit: true,
+        utilizationThresholdLimit: 0.7, // 70%
+      });
+
+      const provider = monitor.getProvider('claude') as any;
+      const resetTime = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      provider.fetchUsage = async () => null;
+      provider.isAvailable = async () => true;
+      provider.getCachedLiveUsage = () => ({
+        sessionUsedPercentage: 65,
+        sessionResetText: 'resets in 2 hours',
+        sessionResetAt: resetTime,
+        lastFetchedAt: new Date(),
+      });
+
+      const agyProvider = monitor.getProvider('agy') as any;
+      agyProvider.fetchUsage = async () => null;
+
+      await monitor.fetchLiveUsage(false);
+      expect(monitor.isRunnerPaused('claude')).toBe(false);
+    });
+
+    it('should NOT pause when pauseOnLimit is false, even if threshold is exceeded', async () => {
+      const monitor = new QuotaMonitor({
+        pauseOnLimit: false,
+        utilizationThresholdLimit: 0.7, // 70%
+      });
+
+      const provider = monitor.getProvider('claude') as any;
+      provider.fetchUsage = async () => null;
+      provider.isAvailable = async () => true;
+      provider.getCachedLiveUsage = () => ({
+        sessionUsedPercentage: 95,
+        sessionResetText: 'resets in 1 hour',
+        sessionResetAt: new Date(Date.now() + 60 * 60 * 1000),
+        lastFetchedAt: new Date(),
+      });
+
+      const agyProvider = monitor.getProvider('agy') as any;
+      agyProvider.fetchUsage = async () => null;
+
+      await monitor.fetchLiveUsage(false);
+      expect(monitor.isRunnerPaused('claude')).toBe(false);
+    });
+
+    it('should automatically resume runner when usage drops below utilizationThresholdLimit', async () => {
+      const monitor = new QuotaMonitor({
+        pauseOnLimit: true,
+        utilizationThresholdLimit: 0.75, // 75%
+      });
+
+      const resetTime = new Date(Date.now() + 3 * 60 * 60 * 1000);
+      monitor.triggerQuotaPause(resetTime, 'Quota limit reached', 'claude');
+      expect(monitor.isRunnerPaused('claude')).toBe(true);
+
+      // Usage dropped to 50% in a new window
+      const newResetTime = new Date(Date.now() + 5 * 60 * 60 * 1000);
+      const provider = monitor.getProvider('claude') as any;
+      provider.fetchUsage = async () => null;
+      provider.isAvailable = async () => true;
+      provider.getCachedLiveUsage = () => ({
+        sessionUsedPercentage: 50,
+        sessionResetText: 'resets in 5 hours',
+        sessionResetAt: newResetTime,
+        lastFetchedAt: new Date(),
+      });
+
+      const agyProvider = monitor.getProvider('agy') as any;
+      agyProvider.fetchUsage = async () => null;
+
+      await monitor.fetchLiveUsage(false);
+      expect(monitor.isRunnerPaused('claude')).toBe(false);
+      expect(monitor.getStatus().isPaused).toBe(false);
+    });
+
+    it('should proactively pause AGY runner when any bucket hits utilizationThresholdLimit', async () => {
+      const monitor = new QuotaMonitor({
+        pauseOnLimit: true,
+        utilizationThresholdLimit: 0.8, // 80%
+      });
+
+      const claudeProvider = monitor.getProvider('claude') as any;
+      claudeProvider.isAvailable = async () => false;
+
+      const agyReset = new Date(Date.now() + 60 * 60 * 1000);
+      const agyProvider = monitor.getProvider('agy') as any;
+      agyProvider.isAvailable = async () => true;
+      agyProvider.fetchUsage = async () => ({
+        runnerName: 'agy',
+        displayName: 'Antigravity CLI',
+        buckets: [
+          { name: 'Gemini 5h', group: 'Gemini Models', windowType: 'five_hour', usedPercentage: 85, resetAt: agyReset },
+        ],
+        lastFetchedAt: new Date(),
+      });
+
+      await monitor.fetchLiveUsage(false);
+      expect(monitor.isRunnerPaused('agy')).toBe(true);
+      expect(monitor.getStatus().reason).toContain('85% used (threshold: 80%) for Gemini 5h');
+    });
+
+    it('should allow manual resume to override threshold pause without getting immediately re-paused', async () => {
+      const monitor = new QuotaMonitor({
+        pauseOnLimit: true,
+        utilizationThresholdLimit: 0.7, // 70%
+      });
+
+      const provider = monitor.getProvider('claude') as any;
+      const resetTime = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      provider.fetchUsage = async () => ({
+        runnerName: 'claude',
+        displayName: 'Claude Code CLI',
+        buckets: [{ name: 'Session 5h', group: 'Claude Models', windowType: 'five_hour', usedPercentage: 80, resetAt: resetTime }],
+        lastFetchedAt: new Date(),
+      });
+      provider.isAvailable = async () => true;
+      provider.getCachedLiveUsage = () => ({
+        sessionUsedPercentage: 80,
+        sessionResetText: 'resets in 2 hours',
+        sessionResetAt: resetTime,
+        lastFetchedAt: new Date(),
+      });
+
+      const agyProvider = monitor.getProvider('agy') as any;
+      agyProvider.fetchUsage = async () => null;
+
+      // 1. Initial poll pauses because 80% >= 70%
+      await monitor.fetchLiveUsage(false);
+      expect(monitor.isRunnerPaused('claude')).toBe(true);
+
+      // 2. Developer manually resumes the runner (sets override)
+      monitor.resumeFromQuota('claude', true);
+      expect(monitor.isRunnerPaused('claude')).toBe(false);
+      expect(monitor.isRunnerOverridden('claude')).toBe(true);
+
+      // 3. Next poll occurs while usage is STILL 80% — should NOT re-pause
+      await monitor.fetchLiveUsage(false);
+      expect(monitor.isRunnerPaused('claude')).toBe(false);
+
+      // 4. In a new reset window, usage drops and override automatically clears
+      const newResetTime = new Date(Date.now() + 5 * 60 * 60 * 1000);
+      provider.getCachedLiveUsage = () => ({
+        sessionUsedPercentage: 20,
+        sessionResetText: 'resets in 5 hours',
+        sessionResetAt: newResetTime,
+        lastFetchedAt: new Date(),
+      });
+
+      await monitor.fetchLiveUsage(false);
+      expect(monitor.isRunnerOverridden('claude')).toBe(false);
+      expect(monitor.isRunnerPaused('claude')).toBe(false);
+    });
+
+    it('should ignore quota threshold and suppress pause events when runner is not in allowedProviders', async () => {
+      const monitor = new QuotaMonitor({
+        pauseOnLimit: true,
+        utilizationThresholdLimit: 0.7, // 70%
+        allowedProviders: ['agy'], // Claude is disabled in this repo
+      });
+
+      const pausedEvents: any[] = [];
+      monitor.on('quota_paused', (e) => pausedEvents.push(e));
+
+      const claudeProvider = monitor.getProvider('claude') as any;
+      const resetTime = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      claudeProvider.isAvailable = async () => true;
+      claudeProvider.fetchUsage = async () => ({
+        runnerName: 'claude',
+        displayName: 'Claude Code CLI',
+        buckets: [{ name: 'Session 5h', group: 'Claude Models', windowType: 'five_hour', usedPercentage: 90, resetAt: resetTime }],
+        lastFetchedAt: new Date(),
+      });
+      claudeProvider.getCachedLiveUsage = () => ({
+        sessionUsedPercentage: 90,
+        sessionResetText: 'resets in 2 hours',
+        sessionResetAt: resetTime,
+        lastFetchedAt: new Date(),
+      });
+
+      const agyProvider = monitor.getProvider('agy') as any;
+      agyProvider.isAvailable = async () => true;
+      agyProvider.fetchUsage = async () => ({
+        runnerName: 'agy',
+        displayName: 'Antigravity CLI',
+        buckets: [{ name: 'Gemini 5h', group: 'Gemini Models', windowType: 'five_hour', usedPercentage: 30, resetAt: resetTime }],
+        lastFetchedAt: new Date(),
+      });
+
+      await monitor.fetchLiveUsage(false);
+
+      // Claude exceeds 70%, but since it is not allowed in this repo, it must NOT pause or emit events
+      expect(monitor.isRunnerPaused('claude')).toBe(false);
+      expect(pausedEvents).toHaveLength(0);
+
+      // If Claude tries to trigger a pause directly, it should be ignored
+      monitor.triggerQuotaPause(resetTime, 'Session limit reached', 'claude');
+      expect(monitor.isRunnerPaused('claude')).toBe(false);
+      expect(pausedEvents).toHaveLength(0);
+    });
+  });
 });

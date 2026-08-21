@@ -36,6 +36,7 @@ export function buildGuidelines(
    - No work can be enqueued to the agent without human consent. Never tag newly created follow-up tasks as \`ready-for-agent\` unless explicitly instructed.
    - Always create follow-up issues with the \`needs-triage\` label: \`gh issue create --title "<title>" --body "Parent: #${issue.number}\\nBlocked by: #${issue.number}\\n\\n<details>\\n\\n### Proposed Solution & Reasoning\\n<if confident, explain why and detail your concern/reasoning for human review>" --label "needs-triage"\`
 3. **Review, PR, Rebase & Merge**:
+   - Review both the task description and any discussion/comments above before implementing (comments may contain triage notes, agent briefs, or follow-up decisions).
    - ${reviewText} If review and tests were already completed in a prior turn, do not repeat them redundantly.
    - Push your branch and open a Pull Request: \`gh pr create --title "<title>" --body "Closes #${issue.number}\\n\\n<summary>"\`
    - Rebase onto \`${baseBranch}\` and resolve any conflicts if necessary.
@@ -78,6 +79,22 @@ Resume work on this task after a session pause. Continue from your previous stat
 `;
   }
 
+  let commentsSection = "";
+  if (issue.comments && issue.comments.length > 0) {
+    const formattedComments = issue.comments
+      .filter((c) => c.body && c.body.trim())
+      .map((c) => {
+        const author = c.author?.login ? `@${c.author.login}` : "User";
+        const date = c.createdAt ? ` (${c.createdAt})` : "";
+        return `**${author}**${date}:\n${c.body.trim()}`;
+      })
+      .join("\n\n---\n\n");
+
+    if (formattedComments) {
+      commentsSection = `\n### Issue Discussion & Comments\n${formattedComments}\n`;
+    }
+  }
+
   const extraSection = extraPrompt
     ? `\n### Repository Instructions\n${extraPrompt.trim()}\n`
     : "";
@@ -88,7 +105,7 @@ Resume work on this task after a session pause. Continue from your previous stat
 
 ### Task Description
 ${issue.body || "No description provided."}
-${extraSection}
+${commentsSection}${extraSection}
 ${guidelines}
 `;
 }

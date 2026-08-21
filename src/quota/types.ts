@@ -36,19 +36,12 @@ export interface ClaudeLiveUsage {
   lastFetchedAt: Date;
 }
 
-export interface RollingWindowStats {
-  turnsCount: number;
-  totalOutputTokens: number;
-  totalInputTokens: number;
-  totalCacheReadTokens: number;
-  totalCacheCreateTokens: number;
-  earliestTurnTimestamp?: number;
-  nextRollOffAt?: Date;
-  tokensExpiringInNextHour: number;
-  burnRatePerMinute: number;
-  estimatedCeiling: number;
-  utilization: number;
-  isApproachingLimit: boolean;
+export interface QuotaMonitorOptions {
+  pauseOnLimit?: boolean;
+  utilizationThresholdLimit?: number;
+  utilizationThreshold?: number;
+  proxyPort?: number;
+  allowedProviders?: string[];
 }
 
 export interface RunnerPauseInfo {
@@ -66,8 +59,8 @@ export interface QuotaStatus {
   reason?: string;
   pausedRunner?: string;
   pausedRunners?: Record<string, RunnerPauseInfo>;
+  overriddenRunners?: string[];
   activePids: number[];
-  rollingStats?: RollingWindowStats;
   liveUsage?: ClaudeLiveUsage;
   runnerUsage?: Record<string, RunnerLiveUsage>;
 }

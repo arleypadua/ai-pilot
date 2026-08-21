@@ -1,4 +1,4 @@
-import type { TelegramNotificationsConfig } from '../types/index.js';
+import type { TelegramNotificationsConfig, EnqueueTaskOptions, EnqueueResult } from '../types/index.js';
 import type { TelegramRateLimiter } from './rate_limiter.js';
 import type { AgentEventBus } from '../events/bus.js';
 import type { QuotaMonitor } from '../quota/monitor.js';
@@ -119,6 +119,25 @@ export interface RemoteActionController {
   cleanWorktrees?(): Promise<{ success: boolean; message: string; count?: number }>;
   getInspectSummary?(issueNumber?: number): Promise<string>;
   getLogsSummary?(issueNumber: number, tailLines?: number): Promise<string>;
+  enqueueTask?(
+    issueNumber: number,
+    options?: EnqueueTaskOptions
+  ): Promise<EnqueueResult>;
+  injectPrompt?(
+    issueNumber: number,
+    prompt: string
+  ): Promise<{ success: boolean; message: string }>;
+  getLiveTailReport?(
+    issueNumber: number,
+    sinceTimestamp?: number
+  ): Promise<{
+    issueNumber: number;
+    status?: string;
+    branchName?: string;
+    runnerName?: string;
+    events: Array<{ timestamp: string; summary: string; type: string }>;
+    diffStat?: string;
+  }>;
 }
 
 export interface TaskStartedNotificationPayload {

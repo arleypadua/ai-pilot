@@ -15,7 +15,7 @@ interface CategoryIssuesViewProps {
   categoryTitle: string;
   issues: CategoryIssueItem[];
   selectedIndex: number;
-  confirmAction?: { type: 'kill' | 'pause'; issueNumber: number } | null;
+  confirmAction?: { type: 'kill' | 'pause' | 'enqueue'; issueNumber: number; message?: string } | null;
   statusMessage?: string;
   repository?: string;
 }
@@ -109,6 +109,20 @@ export const CategoryIssuesView: React.FC<CategoryIssuesViewProps> = ({
           </Text>
           <Text bold color="yellow">
             Press [y] to confirm and wipe, or [n] / [Esc] to cancel.
+          </Text>
+        </Box>
+      )}
+
+      {confirmAction && confirmAction.type === 'enqueue' && (
+        <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginBottom={1}>
+          <Text bold color="yellow">
+            {`⚠️ CONFIRM PRIORITY ENQUEUE: Issue #${confirmAction.issueNumber}`}
+          </Text>
+          <Text color="white">
+            {confirmAction.message || `Issue #${confirmAction.issueNumber} will be enqueued into the priority queue.`}
+          </Text>
+          <Text bold color="cyan">
+            Press [y] to confirm and enqueue, or [n] / [Esc] to cancel.
           </Text>
         </Box>
       )}
@@ -219,7 +233,7 @@ export const CategoryIssuesView: React.FC<CategoryIssuesViewProps> = ({
       {/* Footer Navigation */}
       <Box borderStyle="single" borderColor="gray" paddingX={1}>
         <Text color="cyan">
-          [p] Pause/Resume  •  [k] Kill &amp; Wipe  •  [o] Open in Browser  •  [Enter] Inspect Live Tail  •  [Esc] Back
+          [e] Enqueue  •  [p] Pause/Resume  •  [k] Kill &amp; Wipe  •  [o] Open in Browser  •  [Enter] Inspect Live Tail  •  [Esc] Back
         </Text>
       </Box>
     </Box>

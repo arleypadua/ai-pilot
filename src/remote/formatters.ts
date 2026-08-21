@@ -492,7 +492,11 @@ export function formatSpecs(
 /**
  * Formats command reference and security status for /help command.
  */
-export function formatHelp(repository: string | undefined, securityInfo: SecurityStatusInfo): string {
+export function formatHelp(
+  repository: string | undefined,
+  securityInfo: SecurityStatusInfo,
+  activeWorkers?: Array<{ issueNumber: number; title?: string }>
+): string {
   const repoTag = formatRepoTag(repository);
   const lines = [
     `${repoTag}📖 *Imagos Remote Bot Help*`,
@@ -500,6 +504,8 @@ export function formatHelp(repository: string | undefined, securityInfo: Securit
     '*Available Slash Commands*:',
     '• `/status` - View daemon health, active workers, git branches, and target specs',
     '• `/tasks` - View in-progress, paused, and queued tasks with pause/resume controls',
+    '• `/steer <issue> <prompt>` - Steer a running worker and receive a live tail impact report',
+    '• `/enqueue <issue> [--force]` - Enqueue an issue to priority queue (aliases: `/run`)',
     '• `/pause [issue]` - Pause global task dispatching or pause a specific worker',
     '• `/resume [issue]` - Clear rate-limit pause and resume workers',
     '• `/specs [numbers|all]` - List and switch scoped parent specs',
@@ -507,12 +513,151 @@ export function formatHelp(repository: string | undefined, securityInfo: Securit
     '• `/inspect <issue>` - Inspect active worker tool calls & diffs',
     '• `/logs <issue>` - View recent daemon logs',
     '• `/help` - Show command reference and usage',
+  ];
+
+  if (activeWorkers && activeWorkers.length > 0) {
+    lines.push('', '*Active Sessions Quick Controls (tap to copy)*:');
+    for (const w of activeWorkers) {
+      const titleStr = w.title ? ` - ${escapeMarkdown(w.title)}` : '';
+      lines.push(`• *#${w.issueNumber}*${titleStr}`);
+      lines.push(`  \`/steer ${w.issueNumber} <instruction>\``);
+      lines.push(`  \`/inspect ${w.issueNumber}\`  |  \`/pause ${w.issueNumber}\``);
+    }
+  }
+
+  lines.push(
     '',
     '🔒 *Security Status*:',
     `• *Authorization*: ${securityInfo.isAuthorized ? 'Authorized ✅' : 'Unauthorized ❌'}`,
     `• *Whitelist*: ${securityInfo.whitelistStatus}`,
-    `• *Telegram User ID*: \`${securityInfo.userId}\``,
+    `• *Telegram User ID*: \`${securityInfo.userId}\``
+  );
+
+  return lines.join('\n');
+}
+
+/**
+ * Formats usage help for /steer command with active workers context.
+ */
+export function formatSteerUsage(
+  repository: string | undefined,
+  activeWorkers?: Array<{ issueNumber: number; title?: string; runnerName?: string; branchName?: string }>
+): string {
+  const repoTag = formatRepoTag(repository);
+  const lines = [
+    `${repoTag}💡 *Steer Running Sessions*`,
+    '',
+    '• *Usage*: `/steer <issueNumber> <instructions>` (or `/prompt`)',
+    '• Injects prompt/feedback directly into an active worker or dispatches an issue turn.',
+    '• Returns immediate feedback and an 8-second live tail impact report.',
   ];
+
+  if (activeWorkers && activeWorkers.length > 0) {
+    lines.push('', '*Currently Active Sessions (tap to copy)*:');
+    for (const w of activeWorkers) {
+      const titleStr = w.title ? ` - ${escapeMarkdown(w.title)}` : '';
+      const runnerStr = w.runnerName ? ` [${w.runnerName}]` : '';
+      lines.push(`• *#${w.issueNumber}*${runnerStr}${titleStr}`);
+      lines.push(`  \`/steer ${w.issueNumber} <your instructions>\``);
+    }
+  } else {
+    lines.push('', '• No workers are currently running. Providing an issue number will resume or dispatch that task with your instructions (e.g. `/steer 42 focus on tests`).');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Formats usage help for /enqueue command with candidate issues context.
+ */
+export function formatEnqueueUsage(
+  repository: string | undefined,
+  candidates?: {
+    queued?: Array<{ issueNumber: number; title?: string }>;
+    ready?: Array<{ issueNumber: number; title?: string }>;
+    blocked?: Array<{ issueNumber: number; title?: string }>;
+  }
+): string {
+  const repoTag = formatRepoTag(repository);
+  const lines = [
+    `${repoTag}💡 *Priority Enqueue Usage*`,
+    '',
+    '• *Usage*: `/enqueue <issueNumber> [--force]` (aliases: `/run`, `/dispatch`)',
+    '• Places an issue at the front of the queue to be dispatched on the next available slot.',
+  ];
+
+  const items = candidates?.queued || candidates?.ready || [];
+  if (items.length > 0) {
+    lines.push('', '*Available Candidate Tasks (tap to copy)*:');
+    for (const item of items.slice(0, 5)) {
+      const titleStr = item.title ? ` - ${escapeMarkdown(item.title)}` : '';
+      lines.push(`• *#${item.issueNumber}*${titleStr}`);
+      lines.push(`  \`/enqueue ${item.issueNumber}\``);
+    }
+  }
+
+  if (candidates?.blocked && candidates.blocked.length > 0) {
+    lines.push('', '*Blocked Tasks (require confirmation or --force)*:');
+    for (const item of candidates.blocked.slice(0, 3)) {
+      const titleStr = item.title ? ` - ${escapeMarkdown(item.title)}` : '';
+      lines.push(`• *#${item.issueNumber}*${titleStr}`);
+      lines.push(`  \`/enqueue ${item.issueNumber} --force\``);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Formats usage help for /pause command with active workers context.
+ */
+export function formatPauseUsage(
+  repository: string | undefined,
+  activeWorkers?: Array<{ issueNumber: number; title?: string }>
+): string {
+  const repoTag = formatRepoTag(repository);
+  const lines = [
+    `${repoTag}⏸️ *Pause Controls*`,
+    '',
+    '• `/pause` - Pause global task dispatching',
+    '• `/pause <issueNumber>` - Pause a specific running worker',
+  ];
+
+  if (activeWorkers && activeWorkers.length > 0) {
+    lines.push('', '*Running Workers (tap to copy)*:');
+    for (const w of activeWorkers) {
+      const titleStr = w.title ? ` - ${escapeMarkdown(w.title)}` : '';
+      lines.push(`• *#${w.issueNumber}*${titleStr}`);
+      lines.push(`  \`/pause ${w.issueNumber}\``);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Formats usage help for /resume command with paused workers context.
+ */
+export function formatResumeUsage(
+  repository: string | undefined,
+  pausedTasks?: Array<{ issueNumber: number; title?: string }>
+): string {
+  const repoTag = formatRepoTag(repository);
+  const lines = [
+    `${repoTag}▶️ *Resume Controls*`,
+    '',
+    '• `/resume` - Clear rate-limit pauses and resume global dispatching',
+    '• `/resume <issueNumber>` - Resume a specific paused worker',
+  ];
+
+  if (pausedTasks && pausedTasks.length > 0) {
+    lines.push('', '*Paused Workers (tap to copy)*:');
+    for (const w of pausedTasks) {
+      const titleStr = w.title ? ` - ${escapeMarkdown(w.title)}` : '';
+      lines.push(`• *#${w.issueNumber}*${titleStr}`);
+      lines.push(`  \`/resume ${w.issueNumber}\``);
+    }
+  }
 
   return lines.join('\n');
 }
@@ -537,11 +682,71 @@ export function formatInspect(repository: string | undefined, issueNumber: numbe
 }
 
 /**
- * Formats usage help for /inspect command.
+ * Formats usage help for /inspect command with active, paused, and enqueued tasks context.
  */
-export function formatInspectHelp(repository: string | undefined): string {
+export function formatInspectHelp(
+  repository: string | undefined,
+  tasks?:
+    | {
+        inProgress?: Array<{ issueNumber: number; title?: string; branchName?: string; runnerName?: string }>;
+        paused?: Array<{ issueNumber: number; title?: string; status?: string }>;
+        queued?: Array<{ issueNumber: number; title?: string; isSpec?: boolean }>;
+      }
+    | Array<{ issueNumber: number; title?: string }>
+): string {
   const repoTag = formatRepoTag(repository);
-  return `${repoTag}🔍 *Inspect Usage*\n\nUse \`/inspect <issueNumber>\` (e.g. \`/inspect 42\`) to inspect active worker tool calls and git diffs.`;
+  const lines = [
+    `${repoTag}🔍 *Inspect Task & Worker Sessions*`,
+    '',
+    '• *Usage*: `/inspect <issueNumber>`',
+    '• View active tool calls, runner thoughts, session metadata, diffs, and latest activity.',
+  ];
+
+  let inProgress: Array<{ issueNumber: number; title?: string; runnerName?: string }> = [];
+  let paused: Array<{ issueNumber: number; title?: string }> = [];
+  let queued: Array<{ issueNumber: number; title?: string }> = [];
+
+  if (Array.isArray(tasks)) {
+    inProgress = tasks;
+  } else if (tasks) {
+    inProgress = tasks.inProgress || [];
+    paused = tasks.paused || [];
+    queued = tasks.queued || [];
+  }
+
+  if (inProgress.length > 0) {
+    lines.push('', '*Active Workers (tap to copy)*:');
+    for (const w of inProgress) {
+      const titleStr = w.title ? ` - ${escapeMarkdown(w.title)}` : '';
+      const runnerStr = w.runnerName ? ` [${w.runnerName}]` : '';
+      lines.push(`• *#${w.issueNumber}*${runnerStr}${titleStr}`);
+      lines.push(`  \`/inspect ${w.issueNumber}\``);
+    }
+  }
+
+  if (paused.length > 0) {
+    lines.push('', '*Paused Tasks (tap to copy)*:');
+    for (const p of paused) {
+      const titleStr = p.title ? ` - ${escapeMarkdown(p.title)}` : '';
+      lines.push(`• *#${p.issueNumber}* (paused)${titleStr}`);
+      lines.push(`  \`/inspect ${p.issueNumber}\``);
+    }
+  }
+
+  if (queued.length > 0) {
+    lines.push('', '*Enqueued & Ready Tasks (tap to copy)*:');
+    for (const q of queued.slice(0, 6)) {
+      const titleStr = q.title ? ` - ${escapeMarkdown(q.title)}` : '';
+      lines.push(`• *#${q.issueNumber}*${titleStr}`);
+      lines.push(`  \`/inspect ${q.issueNumber}\``);
+    }
+  }
+
+  if (inProgress.length === 0 && paused.length === 0 && queued.length === 0) {
+    lines.push('', '• Specify an issue number to inspect (e.g. `/inspect 42`).');
+  }
+
+  return lines.join('\n');
 }
 
 /**
@@ -554,11 +759,70 @@ export function formatLogs(repository: string | undefined, issueNumber: number, 
 }
 
 /**
- * Formats usage help for /logs command.
+ * Formats usage help for /logs command with active, paused, and enqueued tasks context.
  */
-export function formatLogsHelp(repository: string | undefined): string {
+export function formatLogsHelp(
+  repository: string | undefined,
+  tasks?:
+    | {
+        inProgress?: Array<{ issueNumber: number; title?: string; runnerName?: string }>;
+        paused?: Array<{ issueNumber: number; title?: string; status?: string }>;
+        queued?: Array<{ issueNumber: number; title?: string }>;
+      }
+    | Array<{ issueNumber: number; title?: string; status?: string }>
+): string {
   const repoTag = formatRepoTag(repository);
-  return `${repoTag}📜 *Logs Usage*\n\nUse \`/logs <issueNumber>\` (e.g. \`/logs 42\`) to view recent execution logs for an issue.`;
+  const lines = [
+    `${repoTag}📜 *Session Logs Usage*`,
+    '',
+    '• *Usage*: `/logs <issueNumber>`',
+    '• View stdout/stderr tail and execution logs for an issue session.',
+  ];
+
+  let inProgress: Array<{ issueNumber: number; title?: string }> = [];
+  let paused: Array<{ issueNumber: number; title?: string }> = [];
+  let queued: Array<{ issueNumber: number; title?: string }> = [];
+
+  if (Array.isArray(tasks)) {
+    inProgress = tasks;
+  } else if (tasks) {
+    inProgress = tasks.inProgress || [];
+    paused = tasks.paused || [];
+    queued = tasks.queued || [];
+  }
+
+  if (inProgress.length > 0) {
+    lines.push('', '*Active Workers (tap to copy)*:');
+    for (const w of inProgress) {
+      const titleStr = w.title ? ` - ${escapeMarkdown(w.title)}` : '';
+      lines.push(`• *#${w.issueNumber}* (running)${titleStr}`);
+      lines.push(`  \`/logs ${w.issueNumber}\``);
+    }
+  }
+
+  if (paused.length > 0) {
+    lines.push('', '*Paused Tasks (tap to copy)*:');
+    for (const p of paused) {
+      const titleStr = p.title ? ` - ${escapeMarkdown(p.title)}` : '';
+      lines.push(`• *#${p.issueNumber}* (paused)${titleStr}`);
+      lines.push(`  \`/logs ${p.issueNumber}\``);
+    }
+  }
+
+  if (queued.length > 0) {
+    lines.push('', '*Enqueued & Ready Tasks (tap to copy)*:');
+    for (const q of queued.slice(0, 6)) {
+      const titleStr = q.title ? ` - ${escapeMarkdown(q.title)}` : '';
+      lines.push(`• *#${q.issueNumber}*${titleStr}`);
+      lines.push(`  \`/logs ${q.issueNumber}\``);
+    }
+  }
+
+  if (inProgress.length === 0 && paused.length === 0 && queued.length === 0) {
+    lines.push('', '• Specify an issue number to view its logs (e.g. `/logs 42`).');
+  }
+
+  return lines.join('\n');
 }
 
 /**
@@ -648,4 +912,154 @@ export function parseSpecActionPayload(
     }
   }
   return null;
+}
+
+/**
+ * Builds callback data for enqueue action (e.g. `v1:enq:42:f` or `v1:enq:42:c`).
+ */
+export function buildEnqueueCallbackData(issueNumber: number, action: 'f' | 'c'): string {
+  return `v1:enq:${issueNumber}:${action}`;
+}
+
+/**
+ * Parses callback data for enqueue actions (e.g. `v1:enq:42:f` or `v1:enq:42:c`).
+ */
+export function parseEnqueueActionPayload(
+  payload: string
+): { issueNumber: number; action: 'f' | 'c' } | null {
+  if (!payload || typeof payload !== 'string' || !payload.startsWith('v1:enq:')) {
+    return null;
+  }
+  const parts = payload.split(':');
+  if (parts.length >= 4) {
+    const num = parseInt(parts[2], 10);
+    const act = parts[3];
+    if (!isNaN(num) && (act === 'f' || act === 'c')) {
+      return { issueNumber: num, action: act };
+    }
+  }
+  return null;
+}
+
+/**
+ * Formats enqueue confirmation message with interactive buttons.
+ */
+export function formatEnqueueConfirmation(
+  repository: string | undefined,
+  options: {
+    issueNumber: number;
+    message: string;
+    blockerNumbers?: number[];
+    childNumbers?: number[];
+    isSpec?: boolean;
+    isClosed?: boolean;
+  }
+): { text: string; actions: InteractiveAction[][] } {
+  const repoTag = formatRepoTag(repository);
+  const lines = [
+    `${repoTag}⚠️ *Enqueue Confirmation Required*`,
+    '',
+    escapeMarkdown(options.message),
+    '',
+    `Are you sure you want to force enqueue #${options.issueNumber}?`,
+  ];
+
+  const actions: InteractiveAction[][] = [
+    [
+      {
+        id: `enq_force_${options.issueNumber}`,
+        label: '⚡ Force Enqueue',
+        payload: buildEnqueueCallbackData(options.issueNumber, 'f'),
+      },
+      {
+        id: `enq_cancel_${options.issueNumber}`,
+        label: '❌ Cancel',
+        payload: buildEnqueueCallbackData(options.issueNumber, 'c'),
+      },
+    ],
+  ];
+
+  return { text: lines.join('\n'), actions };
+}
+
+/**
+ * Formats enqueue action response message.
+ */
+export function formatEnqueueResult(
+  repository: string | undefined,
+  result: { success: boolean; message: string; issueNumber: number }
+): string {
+  const repoTag = formatRepoTag(repository);
+  if (result.success) {
+    return `${repoTag}⚡ *Priority Enqueued*: #${result.issueNumber}\n\n${escapeMarkdown(result.message)}`;
+  }
+  return `${repoTag}⚠️ *Enqueue Failed*: #${result.issueNumber}\n\n${escapeMarkdown(result.message)}`;
+}
+
+/**
+ * Formats immediate feedback after steering prompt injection.
+ */
+export function formatSteeringFeedback(
+  repository: string | undefined,
+  payload: {
+    issueNumber: number;
+    prompt: string;
+    resultMessage: string;
+    waitTimeSeconds: number;
+  }
+): string {
+  const repoTag = formatRepoTag(repository);
+  return [
+    `${repoTag}🎯 *Steering Applied*: #${payload.issueNumber}`,
+    '',
+    `• *Prompt*: "${escapeMarkdown(payload.prompt)}"`,
+    `• *Status*: ${escapeMarkdown(payload.resultMessage)}`,
+    '',
+    `⏳ Observing session live tail (reporting back in ${payload.waitTimeSeconds}s)...`,
+  ].join('\n');
+}
+
+/**
+ * Formats live tail impact report after steering.
+ */
+export function formatSteeringLiveTailReport(
+  repository: string | undefined,
+  data: {
+    issueNumber: number;
+    prompt: string;
+    status?: string;
+    branchName?: string;
+    runnerName?: string;
+    events: Array<{ timestamp: string; summary: string; type: string }>;
+    diffStat?: string;
+  }
+): string {
+  const repoTag = formatRepoTag(repository);
+  const lines = [
+    `${repoTag}📊 *Steering Live Tail Report*: #${data.issueNumber}`,
+    '',
+    `• *Injected Steering*: "${escapeMarkdown(data.prompt)}"`,
+  ];
+
+  if (data.status) {
+    const runnerStr = data.runnerName ? ` [${data.runnerName}]` : '';
+    const branchStr = data.branchName ? ` | Branch: \`${data.branchName}\`` : '';
+    lines.push(`• *Status*: \`${data.status}\`${runnerStr}${branchStr}`);
+  }
+
+  if (data.events && data.events.length > 0) {
+    lines.push('', '*Recent Activity in Live Tail*:');
+    for (const evt of data.events.slice(-8)) {
+      lines.push(`• [${evt.timestamp}] ${escapeMarkdown(evt.summary)}`);
+    }
+  } else {
+    lines.push('', '• No new tool events captured in the observation window. Runner is executing or generating response.');
+  }
+
+  if (data.diffStat) {
+    lines.push('', '*Uncommitted Changes*:');
+    lines.push('```', data.diffStat, '```');
+  }
+
+  return lines.join('\n');
 }

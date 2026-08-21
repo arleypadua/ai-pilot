@@ -121,12 +121,37 @@ describe('TUI Components', () => {
     );
 
     const output = lastFrame();
-    expect(output).toContain('5-HOUR QUOTA PAUSED');
+    expect(output).toContain('QUOTA LIMIT PAUSED');
+    expect(output).toContain('Resumes automatically');
+    expect(output).toContain('manual resume');
     expect(output).toContain('#221');
     expect(output).toContain("The CLI's App-slot");
     expect(output).toContain('agent/issue-221');
     expect(output).toContain('paused');
     expect(output).toContain('preserves WIP');
+  });
+
+  it('should render THRESHOLD LIMIT PAUSED banner when paused by threshold', () => {
+    const { lastFrame } = render(
+      <MasterDashboard
+        config={dummyConfig}
+        dag={null}
+        quotaStatus={{
+          isPaused: true,
+          pausedRunner: 'claude',
+          resetAt: new Date(Date.now() + 1000 * 60 * 120),
+          reason: 'Claude Live Session Quota: 74% used (threshold: 70%, resets 5pm)',
+        }}
+        workers={[]}
+        selectedIndex={0}
+        activityLogs={[]}
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('CLAUDE THRESHOLD LIMIT PAUSED');
+    expect(output).toContain('Resumes automatically');
+    expect(output).toContain('manual resume');
   });
 
   it('should render CommandPalette in command input mode and display suggestions', () => {
@@ -224,8 +249,8 @@ describe('TUI Components', () => {
     expect(output).toContain('100%');
     expect(output).toContain('Aug 19 at 10:00pm');
     expect(output).toContain('Weekly Account Quota');
-    expect(output).toContain('62%');
-    expect(output).toContain('SCHEDULED WAKE-UP STATUS (PAUSED)');
+    expect(output).toContain('QUOTA LIMIT (PAUSED)');
+    expect(output).toContain('Resumes automatically at');
     expect(output).toContain('[Esc] Back to Main Dashboard');
   });
 
@@ -623,6 +648,151 @@ describe('TUI Components', () => {
 
     const output = lastFrame();
     expect(output).toContain('Allowed: claude, agy');
+  });
+
+  it('should only render quota telemetry for allowed providers in MasterDashboard', () => {
+    const configClaudeOnly = {
+      ...dummyConfig,
+      allowedProviders: ['claude'],
+    };
+
+    const quotaWithMultipleRunners = {
+      isPaused: false,
+      activePids: [],
+      runnerUsage: {
+        claude: {
+          runnerName: 'claude',
+          displayName: 'Claude Code CLI',
+          buckets: [
+            { name: 'Session 5h', group: 'Claude Models', windowType: 'five_hour' as const, usedPercentage: 45 },
+          ],
+          lastFetchedAt: new Date(),
+        },
+        agy: {
+          runnerName: 'agy',
+          displayName: 'Antigravity CLI',
+          buckets: [
+            { name: 'Gemini 5h', group: 'Gemini Models', windowType: 'five_hour' as const, usedPercentage: 20 },
+          ],
+          lastFetchedAt: new Date(),
+        },
+      },
+    };
+
+    const { lastFrame } = render(
+      <MasterDashboard
+        config={configClaudeOnly}
+        dag={null}
+        quotaStatus={quotaWithMultipleRunners}
+        workers={[]}
+        selectedIndex={0}
+        activityLogs={[]}
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('Claude Code CLI');
+    expect(output).toContain('Session 5h');
+    expect(output).not.toContain('Antigravity CLI');
+    expect(output).not.toContain('Gemini 5h');
+  });
+
+  it('should only render telemetry cards for allowed providers in UsageView', () => {
+    const quotaWithMultipleRunners = {
+      isPaused: false,
+      activePids: [],
+      runnerUsage: {
+        claude: {
+          runnerName: 'claude',
+          displayName: 'Claude Code CLI',
+          buckets: [
+            { name: 'Session 5h', group: 'Claude Models', windowType: 'five_hour' as const, usedPercentage: 45 },
+          ],
+          lastFetchedAt: new Date(),
+        },
+        agy: {
+          runnerName: 'agy',
+          displayName: 'Antigravity CLI',
+          buckets: [
+            { name: 'Gemini 5h', group: 'Gemini Models', windowType: 'five_hour' as const, usedPercentage: 20 },
+          ],
+          lastFetchedAt: new Date(),
+        },
+      },
+    };
+
+    const { lastFrame } = render(
+      <UsageView
+        quotaStatus={quotaWithMultipleRunners}
+        repository="owner/test-repo"
+        allowedProviders={['agy']}
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('ANTIGRAVITY CLI TELEMETRY');
+    expect(output).toContain('Gemini 5h');
+    expect(output).not.toContain('CLAUDE CODE CLI TELEMETRY');
+  });
+
+  it('should render CategoryIssuesView with [e] Enqueue in footer and enqueue confirmation modal', () => {
+    const issuesList = [
+      {
+        issue: {
+          number: 77,
+          title: 'Blocked Feature',
+          body: '',
+          state: 'OPEN' as const,
+          labels: [{ name: 'ready-for-agent' }],
+          url: 'https://github.com/owner/test-repo/issues/77',
+          created_at: '2026-08-20T10:00:00Z',
+          updated_at: '2026-08-20T10:00:00Z',
+          comments: 0,
+        },
+        status: 'blocked' as const,
+        blockers: [70],
+      },
+    ];
+
+    const { lastFrame } = render(
+      <CategoryIssuesView
+        categoryTitle="Blocked Tasks"
+        issues={issuesList}
+        selectedIndex={0}
+        confirmAction={{
+          type: 'enqueue',
+          issueNumber: 77,
+          message: 'Issue #77 is blocked by #70 (open). Enqueue anyway?',
+        }}
+        repository="owner/test-repo"
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('CONFIRM PRIORITY ENQUEUE: Issue #77');
+    expect(output).toContain('Issue #77 is blocked by #70 (open). Enqueue anyway?');
+    expect(output).toContain('[e] Enqueue');
+    expect(output).toContain('Press [y] to confirm and enqueue, or [n] / [Esc] to cancel.');
+  });
+
+  it('should suggest /enqueue in CommandPalette when filtering by /enq', () => {
+    const { lastFrame } = render(
+      <MasterDashboard
+        config={dummyConfig}
+        dag={null}
+        quotaStatus={null}
+        workers={[]}
+        selectedIndex={0}
+        activityLogs={[]}
+        commandInput="/enq"
+        isCommandMode={true}
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('COMMAND PALETTE');
+    expect(output).toContain('/enqueue');
+    expect(output).toContain('Enqueue an issue into priority queue');
   });
 });
 
