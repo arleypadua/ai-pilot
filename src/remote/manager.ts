@@ -127,12 +127,12 @@ export class RemoteControlManager {
       });
     };
     if (this.quotaMonitor) {
-      this.boundOnQuotaMonitorPaused = ({ resetAt, waitMs, runnerName }: any) => {
+      this.boundOnQuotaMonitorPaused = ({ resetAt, waitMs, runnerName, affectedIssues }: any) => {
         const waitMinutes = Math.ceil(
           (waitMs ?? (resetAt ? Math.max(1000, new Date(resetAt).getTime() - Date.now()) : 60000)) /
             (60 * 1000)
         );
-        this.handleQuotaPaused({ resetAt: new Date(resetAt), waitMinutes, runnerName }).catch((err) => {
+        this.handleQuotaPaused({ resetAt: new Date(resetAt), waitMinutes, runnerName, affectedIssues }).catch((err) => {
           ActivityLogger.error('RemoteControlManager error handling quota_monitor paused:', err);
         });
       };
@@ -609,9 +609,9 @@ export class RemoteControlManager {
     const resetAtMs = payload.resetAt ? new Date(payload.resetAt).getTime() : 0;
     if (
       this.lastPausedEvent &&
-      this.lastPausedEvent.resetAt === resetAtMs &&
+      Math.abs(this.lastPausedEvent.resetAt - resetAtMs) < 60000 &&
       this.lastPausedEvent.runner === payload.runnerName &&
-      now - this.lastPausedEvent.timestamp < 2000
+      now - this.lastPausedEvent.timestamp < 30000
     ) {
       return;
     }
@@ -624,7 +624,7 @@ export class RemoteControlManager {
     if (
       this.lastResumedEvent &&
       this.lastResumedEvent.runner === payload.runnerName &&
-      now - this.lastResumedEvent.timestamp < 2000
+      now - this.lastResumedEvent.timestamp < 10000
     ) {
       return;
     }

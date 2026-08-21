@@ -233,6 +233,10 @@ export function formatQuotaPaused(
   if (payload.runnerName) {
     lines.push(`• *Runner*: \`${payload.runnerName}\``);
   }
+  if (payload.affectedIssues && payload.affectedIssues.length > 0) {
+    const issuesStr = payload.affectedIssues.map((n) => `#${n}`).join(', ');
+    lines.push(`• *Suspended Tasks*: ${issuesStr}`);
+  }
   return lines.join('\n');
 }
 

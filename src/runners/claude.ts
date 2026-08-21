@@ -271,7 +271,7 @@ ${guidelines}
         if (this.quotaMonitor) {
           const quotaCheck = this.quotaMonitor.checkOutputForRateLimit(text);
           if (quotaCheck.isRateLimited && quotaCheck.resetAt) {
-            this.quotaMonitor.triggerQuotaPause(quotaCheck.resetAt, quotaCheck.reason);
+            this.quotaMonitor.triggerQuotaPause(quotaCheck.resetAt, quotaCheck.reason, 'claude', [issueNumber]);
           }
         }
       });
@@ -296,7 +296,7 @@ ${guidelines}
         if (this.quotaMonitor) {
           const quotaCheck = this.quotaMonitor.checkOutputForRateLimit(text);
           if (quotaCheck.isRateLimited && quotaCheck.resetAt) {
-            this.quotaMonitor.triggerQuotaPause(quotaCheck.resetAt, quotaCheck.reason);
+            this.quotaMonitor.triggerQuotaPause(quotaCheck.resetAt, quotaCheck.reason, 'claude', [issueNumber]);
           }
         }
       });

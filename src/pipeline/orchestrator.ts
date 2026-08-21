@@ -115,13 +115,26 @@ export class Orchestrator implements RemoteActionController {
     this.isSessionStarted = true;
 
     // Setup quota event listeners
-    this.quotaMonitor.on("quota_paused", ({ resetAt, waitMs, runnerName }) => {
+    this.quotaMonitor.on("quota_paused", ({ resetAt, waitMs, runnerName, affectedIssues }) => {
       const waitMinutes = Math.ceil(waitMs / (60 * 1000));
       this.stateMgr.updateDaemonStatus("paused_quota", resetAt.toISOString());
-      Notifier.notifyQuotaPaused(resetAt, waitMinutes, runnerName);
+      const activeTasks =
+        affectedIssues && affectedIssues.length > 0
+          ? affectedIssues
+          : Array.from(this.activeTaskNumbers);
+      Notifier.notifyQuotaPaused(
+        resetAt,
+        waitMinutes,
+        runnerName,
+        activeTasks.length > 0 ? activeTasks : undefined,
+      );
       const runnerStr = runnerName ? ` [${runnerName}]` : "";
+      const taskStr =
+        activeTasks.length > 0
+          ? ` (Tasks: ${activeTasks.map((n: number) => `#${n}`).join(", ")})`
+          : "";
       this.dashboard.log(
-        `5h Quota limit hit${runnerStr}. Suspended workers until ${resetAt.toLocaleTimeString()}`,
+        `5h Quota limit hit${runnerStr}. Suspended workers${taskStr} until ${resetAt.toLocaleTimeString()}`,
       );
     });
 
@@ -507,20 +520,27 @@ export class Orchestrator implements RemoteActionController {
         isContinuation,
       });
 
-      // 2. Post Start/Resume Comment to GitHub Issue
-      const startComment = isContinuation
-        ? `🔄 **Agent Auto-Pilot resumed work**\n\n- **Session ID**: \`${
-            session.sessionId
-          }\`\n- **Runner**: \`${runnerName}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Resumed At**: \`${new Date().toUTCString()}\`\n\n*Continuing implementation with latest feedback from comments.*`
-        : `🤖 **Agent Auto-Pilot started implementation**\n\n- **Session ID**: \`${
-            session.sessionId
-          }\`\n- **Runner**: \`${runnerName}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${
-            this.config.baseBranch
-          }\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*Delegating task to \`${runnerName}\` (/implement).*`;
+      // 2. Post Start Comment to GitHub Issue (only on initial start, avoiding repetitive noise on resumes/retries)
+      const hasPreviousStartComment = issue.comments?.some(
+        (c) =>
+          c.body.startsWith("🤖 **Agent Auto-Pilot started implementation") ||
+          c.body.startsWith("🔄 **Agent Auto-Pilot resumed work")
+      );
 
-      try {
-        await this.gh.addComment(issue.number, startComment);
-        if (isContinuation) {
+      if (!isContinuation && !hasPreviousStartComment) {
+        const startComment = `🤖 **Agent Auto-Pilot started implementation**\n\n- **Session ID**: \`${
+          session.sessionId
+        }\`\n- **Runner**: \`${runnerName}\` (/implement)\n- **Branch**: \`${branchName}\`\n- **Worktree**: \`${worktreePath}\`\n- **Base Branch**: \`${
+          this.config.baseBranch
+        }\`\n- **Started At**: \`${new Date().toUTCString()}\`\n\n*Delegating task to \`${runnerName}\` (/implement).*`;
+
+        try {
+          await this.gh.addComment(issue.number, startComment);
+        } catch {
+          // Comment failure is non-fatal
+        }
+      } else if (isContinuation) {
+        try {
           await this.gh.editIssueLabels(issue.number, {
             add: [this.config.labels.readyForAgent],
             remove: [
@@ -528,9 +548,9 @@ export class Orchestrator implements RemoteActionController {
               this.config.labels.needsInfo,
             ],
           });
+        } catch {
+          // Best effort
         }
-      } catch {
-        // Comment failure is non-fatal
       }
 
       // 3. Check user feedback for continuation

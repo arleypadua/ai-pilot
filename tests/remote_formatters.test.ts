@@ -214,6 +214,20 @@ describe('Remote Message Formatters', () => {
       expect(msg).toContain('• *Runner*: `claude`');
     });
 
+    it('formats quota paused notification with suspended tasks list', () => {
+      const resetAt = new Date('2026-08-20T18:30:00Z');
+      const msg = formatQuotaPaused('owner/repo', {
+        resetAt,
+        waitMinutes: 45,
+        runnerName: 'claude',
+        affectedIssues: [201, 202],
+      });
+
+      expect(msg).toContain('[owner/repo] ⏳ *Quota Limit Reached*');
+      expect(msg).toContain('• *Runner*: `claude`');
+      expect(msg).toContain('• *Suspended Tasks*: #201, #202');
+    });
+
     it('formats quota resumed notification', () => {
       const msg = formatQuotaResumed('owner/repo', {
         runnerName: 'claude',

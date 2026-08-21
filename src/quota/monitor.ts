@@ -159,15 +159,29 @@ export class QuotaMonitor extends EventEmitter {
   public triggerQuotaPause(
     resetAt: Date,
     reason: string = 'Quota limit reached',
-    runnerName: string = 'claude'
+    runnerName: string = 'claude',
+    affectedIssues?: number[]
   ): void {
     const rName = runnerName.toLowerCase();
-    this.pausedRunners.set(rName, {
+    const existing = this.pausedRunners.get(rName);
+
+    // If already paused and the reset time is effectively unchanged (within 60s), do not re-trigger/spam events
+    if (existing && Math.abs(existing.resetAt.getTime() - resetAt.getTime()) < 60000) {
+      if (affectedIssues && affectedIssues.length > 0) {
+        const merged = Array.from(new Set([...(existing.affectedIssues || []), ...affectedIssues]));
+        existing.affectedIssues = merged;
+      }
+      return;
+    }
+
+    const pauseInfo: RunnerPauseInfo = {
       runnerName: rName,
       pausedAt: new Date(),
       resetAt,
       reason,
-    });
+      affectedIssues,
+    };
+    this.pausedRunners.set(rName, pauseInfo);
 
     this.isPaused = true;
     this.pausedAt = new Date();
@@ -192,6 +206,7 @@ export class QuotaMonitor extends EventEmitter {
       reason: this.pauseReason,
       runnerName: rName,
       waitMs,
+      affectedIssues,
     });
 
     if (this.resumeTimeout) {
@@ -367,8 +382,12 @@ export class QuotaMonitor extends EventEmitter {
       if (!this.isRunnerPaused('claude')) {
         this.triggerQuotaPause(claudeLive.sessionResetAt, `Claude Live Session Quota: 100% used (resets ${claudeLive.sessionResetText})`, 'claude');
       }
-    } else if (this.isRunnerPaused('claude') && claudeLive && claudeLive.sessionUsedPercentage < 100) {
-      this.resumeFromQuota('claude');
+    } else if (this.isRunnerPaused('claude')) {
+      const pauseInfo = this.pausedRunners.get('claude');
+      const resetPassed = pauseInfo ? Date.now() >= pauseInfo.resetAt.getTime() : true;
+      if (resetPassed) {
+        this.resumeFromQuota('claude');
+      }
     }
 
     // Check if AGY 5h limit is reached
@@ -380,7 +399,11 @@ export class QuotaMonitor extends EventEmitter {
           this.triggerQuotaPause(fiveHourBucket.resetAt, `AGY Quota: 100% used for ${fiveHourBucket.name}`, 'agy');
         }
       } else if (this.isRunnerPaused('agy')) {
-        this.resumeFromQuota('agy');
+        const pauseInfo = this.pausedRunners.get('agy');
+        const resetPassed = pauseInfo ? Date.now() >= pauseInfo.resetAt.getTime() : true;
+        if (resetPassed) {
+          this.resumeFromQuota('agy');
+        }
       }
     }
 

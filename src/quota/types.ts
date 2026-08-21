@@ -54,6 +54,7 @@ export interface RunnerPauseInfo {
   pausedAt: Date;
   resetAt: Date;
   reason: string;
+  affectedIssues?: number[];
 }
 
 export interface QuotaStatus {

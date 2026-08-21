@@ -169,6 +169,7 @@ export interface QuotaPausedNotificationPayload {
   resetAt: Date;
   waitMinutes: number;
   runnerName?: string;
+  affectedIssues?: number[];
 }
 
 export interface QuotaResumedNotificationPayload {

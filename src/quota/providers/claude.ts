@@ -9,6 +9,30 @@ export class ClaudeUsageProvider implements UsageProvider {
   private lastFetchTime = 0;
 
   private parseResetTimeString(str: string): Date | undefined {
+    const lower = str.toLowerCase();
+
+    // 1. Check relative "resets in X hours Y minutes" or "resets in Xh Ym"
+    const inHoursMatch =
+      lower.match(/resets?\s+(?:in|after)\s+(\d+)\s*h(?:ours?)?(?:\s*(\d+)\s*m(?:inutes?)?)?/i) ||
+      lower.match(/(\d+)\s*h(?:ours?)?(?:\s*(\d+)\s*m(?:inutes?)?)?/i);
+    if (inHoursMatch) {
+      const hours = parseInt(inHoursMatch[1], 10);
+      const minutes = inHoursMatch[2] ? parseInt(inHoursMatch[2], 10) : 0;
+      const ms = (hours * 60 + minutes) * 60 * 1000;
+      if (ms > 0) return new Date(Date.now() + ms);
+    }
+
+    // 2. Check relative "resets in X minutes" / "Xm"
+    const inMinsMatch =
+      lower.match(/resets?\s+(?:in|after)\s+(\d+)\s*m(?:inutes?)?/i) ||
+      lower.match(/(\d+)\s*m(?:inutes?)/i);
+    if (inMinsMatch) {
+      const minutes = parseInt(inMinsMatch[1], 10);
+      const ms = minutes * 60 * 1000;
+      if (ms > 0) return new Date(Date.now() + ms);
+    }
+
+    // 3. Check am/pm time string like "11am", "11:00 am", "5pm (Europe/Amsterdam)"
     const timeMatch = str.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
     if (timeMatch) {
       let hour = parseInt(timeMatch[1], 10);
@@ -25,6 +49,20 @@ export class ClaudeUsageProvider implements UsageProvider {
       }
       return target;
     }
+
+    // 4. Check 24-hour time string like "17:00"
+    const time24Match = str.match(/(?:at\s+)?(\d{1,2}):(\d{2})/i);
+    if (time24Match) {
+      const hour = parseInt(time24Match[1], 10);
+      const minute = parseInt(time24Match[2], 10);
+      const target = new Date();
+      target.setHours(hour, minute, 0, 0);
+      if (target.getTime() <= Date.now()) {
+        target.setDate(target.getDate() + 1);
+      }
+      return target;
+    }
+
     return undefined;
   }
 
@@ -41,6 +79,32 @@ export class ClaudeUsageProvider implements UsageProvider {
       sessionResetText = sessionMatch[2]?.trim();
       if (sessionResetText) {
         sessionResetAt = this.parseResetTimeString(sessionResetText);
+      }
+    } else {
+      // Check if session limit string is present in stdout
+      const lower = stdout.toLowerCase();
+      const limitPatterns = [
+        'session limit',
+        'hit your session limit',
+        'usage limit reached',
+        'rate limit reached',
+        '5-hour limit',
+        'hit your 5-hour limit',
+        'hit your usage limit',
+        'quota exceeded',
+      ];
+      const isLimitHit = limitPatterns.some((pattern) => lower.includes(pattern));
+      if (isLimitHit) {
+        sessionUsedPercentage = 100;
+        const resetMatch = stdout.match(/resets\s+([^\n\r]+)/i);
+        if (resetMatch) {
+          sessionResetText = resetMatch[1]?.trim();
+          sessionResetAt = this.parseResetTimeString(sessionResetText);
+        }
+        if (!sessionResetAt) {
+          sessionResetAt = new Date(Date.now() + 60 * 60 * 1000);
+          sessionResetText = 'in 1 hour';
+        }
       }
     }
 
