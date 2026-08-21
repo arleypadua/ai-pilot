@@ -28,6 +28,8 @@ describe('ClaudeRunner', () => {
     expect(prompt).toContain('gh issue comment');
     expect(prompt).toContain('❓ **Agent Question**:');
     expect(prompt).toContain('needs-info');
+    expect(prompt).toContain('needs-triage');
+    expect(prompt).toContain('No work can be enqueued to the agent without human consent');
     expect(prompt).toContain('ready-for-agent');
     expect(prompt).toContain('gh pr create');
     expect(prompt).toContain('gh pr merge');
@@ -59,7 +61,8 @@ describe('ClaudeRunner', () => {
     const prompt = runner.buildPrompt(context);
     expect(prompt).toContain('/implement https://github.com/owner/repo/issues/42');
     expect(prompt).toContain('Use prom-client npm library for formatting.');
-    expect(prompt).toContain('gh pr merge');
+    expect(prompt).not.toContain('### Guidelines & Protocol');
+    expect(prompt).not.toContain('Create /api/metrics endpoint.');
   });
 
   it('should inject repository-specific extraPrompt when configured', () => {

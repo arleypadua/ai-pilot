@@ -4,7 +4,7 @@ import os from 'node:os';
 import { execa } from 'execa';
 import type { RunnerResult, TaskContext } from '../types/index.js';
 import type { AgentRunner, RunnerOptions } from './base.js';
-import { isBinaryAvailable } from './base.js';
+import { isBinaryAvailable, buildRunnerPrompt } from './base.js';
 import { QuotaMonitor } from '../quota/monitor.js';
 import { AgentEventBus } from '../events/bus.js';
 
@@ -40,74 +40,7 @@ export class AgyRunner implements AgentRunner {
   }
 
   public buildPrompt(context: TaskContext): string {
-    const {
-      issue,
-      isContinuation,
-      userFeedback,
-      extraPrompt,
-      baseBranch = 'main',
-      autoMerge = true,
-      mergeMethod = 'squash',
-    } = context;
-    const issueRef = issue.url || `#${issue.number}`;
-
-    const extraSection = extraPrompt
-      ? `\n### Repository Instructions\n${extraPrompt.trim()}\n`
-      : '';
-
-    const mergeGuideline = autoMerge
-      ? `- Once all tests, review, and CI checks pass, merge the Pull Request (e.g. \`gh pr merge --${mergeMethod} --delete-branch\`) to close the issue.`
-      : `- Once all tests and CI checks pass, leave the Pull Request open for developer review and merge (do not auto-merge).`;
-
-    const guidelines = `### Guidelines & Protocol
-1. **Feedback, Questions & Human Review**: If you encounter blocking ambiguities, require clarification, or decide that manual human review is required before merging:
-   - Post your comment or question: \`gh issue comment ${issue.number} --body "❓ **Agent Question**: <your question>"\` or explain why manual review/decision is needed.
-   - Mark for developer feedback: \`gh issue edit ${issue.number} --add-label "ready-for-human" --remove-label "ready-for-agent"\` (or \`--add-label "needs-info"\`).
-   - **Immediately conclude execution and exit.** Do not guess or leave the ticket in an untagged open state.
-2. **Follow-up Subtasks**: If you identify distinct out-of-scope work or follow-up subtasks:
-   - Create child tickets: \`gh issue create --title "<title>" --body "Parent: #${issue.number}\\nBlocked by: #${issue.number}\\n\\n<details>" --label "ready-for-agent"\`
-3. **Review, PR, Rebase & Merge**:
-   - Verify changes with tests and code review. If review and tests were already completed in a prior turn, do not repeat them redundantly.
-   - Push your branch and open a Pull Request: \`gh pr create --title "<title>" --body "Closes #${issue.number}\\n\\n<summary>"\`
-   - Rebase onto \`${baseBranch}\` and resolve any conflicts if necessary.
-   ${mergeGuideline}`;
-
-    if (isContinuation && userFeedback) {
-      return `Implement the requested task for ${issueRef}.
-
-You are continuing work on this task following clarification/steering from the developer.
-
-### Developer Clarification & Steering
-<developer_feedback>
-${userFeedback}
-</developer_feedback>
-
-### Original Issue Description
-${issue.body || 'No description provided.'}
-${extraSection}
-${guidelines}
-`;
-    }
-
-    if (isContinuation) {
-      return `Implement the requested task for ${issueRef}.
-
-You are resuming work on this task after a session pause. Your previous conversation history and worktree state are preserved.
-
-### Original Issue Description
-${issue.body || 'No description provided.'}
-${extraSection}
-${guidelines}
-`;
-    }
-
-    return `Implement the requested task for ${issueRef}.
-
-### Task Description
-${issue.body || 'No description provided.'}
-${extraSection}
-${guidelines}
-`;
+    return buildRunnerPrompt(context);
   }
 
   public async injectPrompt(issueNumber: number, prompt: string): Promise<boolean> {

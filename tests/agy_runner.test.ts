@@ -28,6 +28,8 @@ describe('AgyRunner', () => {
     expect(prompt).toContain('gh issue comment');
     expect(prompt).toContain('❓ **Agent Question**:');
     expect(prompt).toContain('needs-info');
+    expect(prompt).toContain('needs-triage');
+    expect(prompt).toContain('No work can be enqueued to the agent without human consent');
     expect(prompt).toContain('ready-for-agent');
     expect(prompt).toContain('gh pr create');
     expect(prompt).toContain('gh pr merge');
@@ -57,7 +59,8 @@ describe('AgyRunner', () => {
     const prompt = runner.buildPrompt(context);
     expect(prompt).toContain('Developer Clarification & Steering');
     expect(prompt).toContain('Use better-sqlite3 instead of sqlite3 npm package.');
-    expect(prompt).toContain('Implement SQLite cache driver with WAL mode.');
+    expect(prompt).not.toContain('Implement SQLite cache driver with WAL mode.');
+    expect(prompt).not.toContain('### Guidelines & Protocol');
   });
 
   it('should inject repository-specific extraPrompt when configured', () => {

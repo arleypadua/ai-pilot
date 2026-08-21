@@ -47,3 +47,5 @@ or inside a Spec:
    Developer replies on GitHub and removes `needs-info` / adds `ready-for-agent`.
 3. **Session Resumes**:
    Agent Auto-Pilot loads the existing worktree, fetches the developer's reply, and resumes `/implement` with full continuation context.
+4. **Follow-up Tasks & Consent**:
+   When an agent identifies out-of-scope work or follow-up subtasks, it creates tickets tagged with `needs-triage` (never `ready-for-agent` without explicit human instruction). The agent includes its proposed solution and reasoning at the bottom of the ticket description for human review.

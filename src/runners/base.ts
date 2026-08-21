@@ -29,3 +29,6 @@ export interface AgentRunner {
   resume?(issueNumber: number): boolean;
   isAvailable?(): Promise<boolean>;
 }
+
+export * from './prompt.js';
+
