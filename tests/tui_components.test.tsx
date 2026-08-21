@@ -794,5 +794,70 @@ describe('TUI Components', () => {
     expect(output).toContain('/enqueue');
     expect(output).toContain('Enqueue an issue into priority queue');
   });
+
+  it('should render Needs Triage section in MasterDashboard under Issue DAG Queue', () => {
+    const mockDag: any = {
+      getTargetSpecs: () => [],
+      getReadyNodes: () => [{ issue: { number: 10 } }],
+      getWaitingFeedbackNodes: () => [{ issue: { number: 20 } }],
+      getBlockedNodes: () => [{ issue: { number: 30 }, blockers: [10] }],
+      getTriageNodes: () => [{ issue: { number: 40 } }, { issue: { number: 41 } }],
+    };
+
+    const { lastFrame } = render(
+      <MasterDashboard
+        config={dummyConfig}
+        dag={mockDag}
+        quotaStatus={null}
+        workers={[]}
+        selectedIndex={4}
+        activityLogs={[]}
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('Issue DAG Queue:');
+    expect(output).toContain('🟢 Ready for Agent:');
+    expect(output).toContain('#10');
+    expect(output).toContain('👤 Human Action:');
+    expect(output).toContain('#20');
+    expect(output).toContain('⚪ Blocked by Deps:');
+    expect(output).toContain('#30');
+    expect(output).toContain('📋 Needs Triage:');
+    expect(output).toContain('2');
+    expect(output).toContain('#40, #41');
+  });
+
+  it('should render CategoryIssuesView for triage backlog with pending status badge', () => {
+    const issuesList = [
+      {
+        issue: {
+          number: 40,
+          title: 'Untriaged feature request',
+          state: 'OPEN' as const,
+          labels: [{ name: 'needs-triage' }],
+          created_at: '2026-08-20T10:00:00Z',
+          updated_at: '2026-08-20T10:00:00Z',
+          comments: 0,
+        },
+        status: 'pending' as const,
+      },
+    ];
+
+    const { lastFrame } = render(
+      <CategoryIssuesView
+        categoryTitle="Needs Triage (Triage Backlog)"
+        issues={issuesList}
+        selectedIndex={0}
+        repository="owner/test-repo"
+      />
+    );
+
+    const output = lastFrame();
+    expect(output).toContain('ISSUES: NEEDS TRIAGE (TRIAGE BACKLOG)');
+    expect(output).toContain('#40');
+    expect(output).toContain('Untriaged feature request');
+    expect(output).toContain('needs triage');
+  });
 });
 

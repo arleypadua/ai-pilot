@@ -42,7 +42,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
   const [providersStatusMessage, setProvidersStatusMessage] = useState<string | undefined>(undefined);
 
   // Category Issues View State
-  const [selectedCategory, setSelectedCategory] = useState<'specs' | 'ready' | 'waiting' | 'blocked'>('ready');
+  const [selectedCategory, setSelectedCategory] = useState<'specs' | 'ready' | 'waiting' | 'blocked' | 'triage'>('ready');
   const [categoryItemIndex, setCategoryItemIndex] = useState(0);
   const [confirmAction, setConfirmAction] = useState<{ type: 'kill' | 'pause' | 'enqueue'; issueNumber: number; message?: string } | null>(null);
   const [categoryStatusMessage, setCategoryStatusMessage] = useState<string | undefined>(undefined);
@@ -158,7 +158,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
 
   const specOptions = buildSpecOptions();
 
-  const buildCategoryIssues = (category: 'specs' | 'ready' | 'waiting' | 'blocked'): CategoryIssueItem[] => {
+  const buildCategoryIssues = (category: 'specs' | 'ready' | 'waiting' | 'blocked' | 'triage'): CategoryIssueItem[] => {
     if (!dag) return [];
     const items: CategoryIssueItem[] = [];
     const workersMap = new Map(workers.map((w) => [w.issueNumber, w]));
@@ -193,6 +193,16 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
           worker: workersMap.get(node.issue.number),
         });
       }
+    } else if (category === 'triage') {
+      for (const node of dag.getTriageNodes()) {
+        items.push({
+          issue: node.issue,
+          status: node.status,
+          blockers: node.blockers,
+          parentNumber: node.parentNumber,
+          worker: workersMap.get(node.issue.number),
+        });
+      }
     } else if (category === 'specs') {
       const targetSpecs = dag.getTargetSpecs();
       const specNodes = dag.getAllNodes().filter((n) =>
@@ -210,7 +220,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
     return items;
   };
 
-  const getCategoryTitle = (cat: 'specs' | 'ready' | 'waiting' | 'blocked'): string => {
+  const getCategoryTitle = (cat: 'specs' | 'ready' | 'waiting' | 'blocked' | 'triage'): string => {
     switch (cat) {
       case 'specs':
         return dag && dag.getTargetSpecs().length > 0 ? 'Scoped Specifications' : 'All Specifications';
@@ -220,6 +230,8 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
         return 'Human Action Required (Tasks & Feedback)';
       case 'blocked':
         return 'Blocked by Dependencies';
+      case 'triage':
+        return 'Needs Triage (Triage Backlog)';
     }
   };
 
@@ -517,11 +529,12 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
       const readyCount = dag ? dag.getReadyNodes().length : 0;
       const waitingCount = dag ? dag.getWaitingFeedbackNodes().length : 0;
       const blockedCount = dag ? dag.getBlockedNodes().length : 0;
+      const triageCount = dag ? dag.getTriageNodes().length : 0;
       setCommandResult({
         type: 'info',
         title: '📋 Issue DAG Status Overview',
         lines: [
-          `Ready: ${readyCount} tasks | Waiting: ${waitingCount} tasks | Blocked: ${blockedCount} tasks`,
+          `Ready: ${readyCount} tasks | Waiting: ${waitingCount} tasks | Blocked: ${blockedCount} tasks | Triage: ${triageCount} tasks`,
           `Active workers: ${activeWorkersMap.size} | Worktrees on disk: ${orchestrator.getActiveWorktrees().length}`,
         ],
       });
@@ -712,7 +725,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
         return;
       }
 
-      const totalDashboardItems = workers.length + 5;
+      const totalDashboardItems = workers.length + 6;
 
       if (key.upArrow || input === 'k') {
         setSelectedIndex((prev) => Math.max(0, prev - 1));
@@ -765,6 +778,12 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
           setCategoryStatusMessage(undefined);
           setView('category_issues');
         } else if (selectedIndex === workers.length + 4) {
+          setSelectedCategory('triage');
+          setCategoryItemIndex(0);
+          setConfirmAction(null);
+          setCategoryStatusMessage(undefined);
+          setView('category_issues');
+        } else if (selectedIndex === workers.length + 5) {
           setLogScrollOffset(Math.max(0, activityLogs.length - 16));
           setView('logs');
         }

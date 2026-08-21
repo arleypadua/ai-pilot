@@ -233,6 +233,7 @@ export class Dashboard {
     const ready = dag.getReadyNodes();
     const blocked = dag.getBlockedNodes();
     const feedback = dag.getWaitingFeedbackNodes();
+    const triage = dag.getTriageNodes();
 
     const queueTable = new Table({
       head: [pc.cyan('Status'), pc.cyan('Count'), pc.cyan('Issues')],
@@ -254,6 +255,11 @@ export class Dashboard {
         pc.gray('Blocked by Deps'),
         blocked.length.toString(),
         blocked.map((n) => `#${n.issue.number} (blocked by ${n.blockers.join(', ')})`).join(', ') || pc.gray('None'),
+      ],
+      [
+        pc.magenta('Needs Triage'),
+        triage.length.toString(),
+        triage.map((n) => `#${n.issue.number}`).join(', ') || pc.gray('None'),
       ]
     );
 

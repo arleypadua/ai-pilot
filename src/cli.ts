@@ -678,9 +678,7 @@ program
       const readyNodes = dag.getReadyNodes();
       const waitingNodes = dag.getWaitingFeedbackNodes();
       const blockedNodes = dag.getBlockedNodes();
-      const triageNodes = allNodes.filter(
-        (n: DAGNode) => n.status === 'pending' && (targetSpecs.length === 0 || childIds.has(n.issue.number))
-      );
+      const triageNodes = dag.getTriageNodes();
 
       const filterActive = options.ready || options.pending || options.blocked || options.triage;
 

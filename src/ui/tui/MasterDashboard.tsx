@@ -187,6 +187,7 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
   const readyNodes = dag ? dag.getReadyNodes() : [];
   const waitingNodes = dag ? dag.getWaitingFeedbackNodes() : [];
   const blockedNodes = dag ? dag.getBlockedNodes() : [];
+  const triageNodes = dag ? dag.getTriageNodes() : [];
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={0}>
@@ -371,18 +372,38 @@ export const MasterDashboard: React.FC<MasterDashboardProps> = ({
             {blockedNodes.map((n) => `#${n.issue.number} (blocked by ${n.blockers.join(', ')})`).join(', ') || 'None'}
           </Text>
         </Box>
+
+        {/* 5. Needs Triage Row */}
+        <Box flexDirection="row">
+          <Box width={26}>
+            <Text
+              color={selectedIndex === workers.length + 4 ? 'cyan' : 'magenta'}
+              bold={selectedIndex === workers.length + 4}
+            >
+              {selectedIndex === workers.length + 4 ? '❯ ' : '  '}📋 Needs Triage:
+            </Text>
+          </Box>
+          <Box width={6}>
+            <Text bold color={selectedIndex === workers.length + 4 ? 'cyan' : 'magenta'}>
+              {triageNodes.length}
+            </Text>
+          </Box>
+          <Text color={selectedIndex === workers.length + 4 ? 'cyan' : 'gray'}>
+            {triageNodes.map((n) => `#${n.issue.number}`).join(', ') || 'None'}
+          </Text>
+        </Box>
       </Box>
 
       {/* Recent Activity Snapshot (Strictly capped to 3 single-line entries) */}
       <Box flexDirection="column" marginBottom={1}>
         <Box flexDirection="row">
           <Text
-            bold={selectedIndex === workers.length + 4}
-            color={selectedIndex === workers.length + 4 ? 'cyan' : 'white'}
+            bold={selectedIndex === workers.length + 5}
+            color={selectedIndex === workers.length + 5 ? 'cyan' : 'white'}
           >
-            {selectedIndex === workers.length + 4 ? '❯ ' : '  '}📜 Recent Activity:
+            {selectedIndex === workers.length + 5 ? '❯ ' : '  '}📜 Recent Activity:
           </Text>
-          <Text color={selectedIndex === workers.length + 4 ? 'cyan' : 'gray'}>
+          <Text color={selectedIndex === workers.length + 5 ? 'cyan' : 'gray'}>
             {' '}(press [Enter] or type /logs for full log history)
           </Text>
         </Box>

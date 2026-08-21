@@ -63,6 +63,8 @@ export const CategoryIssuesView: React.FC<CategoryIssuesViewProps> = ({
       }
       case 'blocked':
         return <Text color="gray">🚫 blocked</Text>;
+      case 'pending':
+        return <Text color="magenta">📋 needs triage</Text>;
       default:
         return <Text color="gray">{item.status}</Text>;
     }

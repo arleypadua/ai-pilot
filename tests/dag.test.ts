@@ -773,6 +773,69 @@ describe('IssueDAG', () => {
     dagDisallowed.build(issues);
     expect(dagDisallowed.getNode(10)?.runnerName).toBe('claude');
   });
+
+  it('should correctly return triage nodes and filter by target specs', () => {
+    const issues: GitHubIssue[] = [
+      {
+        number: 1,
+        title: 'Ready Ticket',
+        body: 'Do ready work',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/1',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 2,
+        title: 'Needs Triage Ticket 1',
+        body: 'Needs classification',
+        state: 'OPEN',
+        labels: [{ name: 'needs-triage' }],
+        url: 'https://github.com/owner/repo/issues/2',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 3,
+        title: 'Unlabeled Open Ticket',
+        body: 'Just created',
+        state: 'OPEN',
+        labels: [],
+        url: 'https://github.com/owner/repo/issues/3',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 50,
+        title: '[Spec] Spec 50',
+        body: 'Subtasks:\n- [ ] #51',
+        state: 'OPEN',
+        labels: [{ name: 'ready-for-agent' }],
+        url: 'https://github.com/owner/repo/issues/50',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+      {
+        number: 51,
+        title: 'Spec Child Untriaged',
+        body: 'Parent: #50',
+        state: 'OPEN',
+        labels: [{ name: 'needs-triage' }],
+        url: 'https://github.com/owner/repo/issues/51',
+        createdAt: '2026-08-19T10:00:00Z',
+        updatedAt: '2026-08-19T10:00:00Z',
+      },
+    ];
+
+    const unscopedDag = new IssueDAG(DEFAULT_CONFIG);
+    unscopedDag.build(issues);
+    expect(unscopedDag.getTriageNodes().map((n) => n.issue.number).sort()).toEqual([2, 3, 51]);
+
+    const scopedDag = new IssueDAG({ ...DEFAULT_CONFIG, targetSpec: 50 });
+    scopedDag.build(issues);
+    expect(scopedDag.getTriageNodes().map((n) => n.issue.number)).toEqual([51]);
+  });
 });
 
 describe('parseSpecsOption', () => {

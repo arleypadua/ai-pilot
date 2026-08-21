@@ -323,6 +323,24 @@ export class IssueDAG {
     return nodes;
   }
 
+  public getTriageNodes(): DAGNode[] {
+    let nodes = this.getAllNodes().filter((n: DAGNode) => n.status === 'pending');
+    const targetSpecs = this.getTargetSpecs();
+
+    if (targetSpecs.length > 0) {
+      const childIds = new Set<number>();
+      for (const specNumber of targetSpecs) {
+        for (const childId of this.getSpecChildIssueNumbers(specNumber)) {
+          childIds.add(childId);
+        }
+        childIds.add(specNumber); // Also include the spec itself
+      }
+      nodes = nodes.filter((n: DAGNode) => childIds.has(n.issue.number));
+    }
+
+    return nodes;
+  }
+
   public getUnresolvedBlockers(issueNumber: number): number[] {
     const node = this.nodes.get(issueNumber);
     if (!node) return [];
