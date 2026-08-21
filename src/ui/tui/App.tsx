@@ -11,6 +11,7 @@ import { SpecPickerView, type SpecOption } from './SpecPickerView.js';
 import { ActivityLogView } from './ActivityLogView.js';
 import { CategoryIssuesView, type CategoryIssueItem } from './CategoryIssuesView.js';
 import { ProvidersPickerView } from './ProvidersPickerView.js';
+import { IssueBrowserView, type FlatTreeItem } from './IssueBrowserView.js';
 import { AVAILABLE_COMMANDS, type CommandResult } from './CommandPalette.js';
 import type { ProviderInfo } from '../../types/index.js';
 
@@ -21,7 +22,7 @@ interface AppProps {
 
 export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
   const { exit } = useApp();
-  const [view, setView] = useState<'dashboard' | 'inspect' | 'usage' | 'spec_picker' | 'logs' | 'category_issues' | 'providers'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'inspect' | 'usage' | 'spec_picker' | 'logs' | 'category_issues' | 'providers' | 'issue_browser'>('dashboard');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [inspectIssueNumber, setInspectIssueNumber] = useState<number | null>(null);
   const [inputText, setInputText] = useState('');
@@ -45,6 +46,13 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
   const [categoryItemIndex, setCategoryItemIndex] = useState(0);
   const [confirmAction, setConfirmAction] = useState<{ type: 'kill' | 'pause' | 'enqueue'; issueNumber: number; message?: string } | null>(null);
   const [categoryStatusMessage, setCategoryStatusMessage] = useState<string | undefined>(undefined);
+
+  // Issue Browser View State
+  const [browserIndex, setBrowserIndex] = useState(0);
+  const [expandedSpecs, setExpandedSpecs] = useState<Set<number>>(new Set());
+  const [browserConfirmAction, setBrowserConfirmAction] = useState<{ type: 'kill' | 'pause' | 'enqueue'; issueNumber: number; message?: string } | null>(null);
+  const [browserStatusMessage, setBrowserStatusMessage] = useState<string | undefined>(undefined);
+  const [showOnlyOpen, setShowOnlyOpen] = useState(false);
 
   // Command Palette State
   const [commandInput, setCommandInput] = useState('');
@@ -215,6 +223,104 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
     }
   };
 
+  const buildTreeItems = (
+    expanded: Set<number>,
+    onlyOpen: boolean = false,
+  ): { items: FlatTreeItem[]; totalSpecsCount: number; totalStandaloneCount: number } => {
+    if (!dag) return { items: [], totalSpecsCount: 0, totalStandaloneCount: 0 };
+    const allNodes = dag.getAllNodes();
+    const workersMap = new Map(workers.map((w) => [w.issueNumber, w]));
+    const items: FlatTreeItem[] = [];
+
+    // 1. Open Specifications
+    const openSpecNodes = allNodes.filter((n) => n.kind === 'spec' && n.issue.state === 'OPEN');
+    const childAssignedNumbers = new Set<number>();
+
+    for (const specNode of openSpecNodes) {
+      const comp = dag.isSpecComplete(specNode.issue.number);
+      const isExpanded = expanded.has(specNode.issue.number);
+      const childNumbers = dag.getSpecChildIssueNumbers(specNode.issue.number);
+
+      items.push({
+        type: 'spec',
+        number: specNode.issue.number,
+        title: specNode.issue.title,
+        status: specNode.status,
+        isComplete: comp.isComplete,
+        totalTickets: comp.totalTickets,
+        completedTickets: comp.completedTickets,
+        isExpanded,
+        worker: workersMap.get(specNode.issue.number),
+        blockers: specNode.blockers,
+        labels: specNode.issue.labels?.map((l) => l.name),
+        issue: specNode.issue,
+      });
+
+      if (isExpanded && childNumbers.length > 0) {
+        const visibleChildNumbers = onlyOpen
+          ? childNumbers.filter((childId) => {
+              const childNode = dag.getNode(childId);
+              return childNode && childNode.issue.state !== 'CLOSED';
+            })
+          : childNumbers;
+
+        visibleChildNumbers.forEach((childId, idx) => {
+          childAssignedNumbers.add(childId);
+          const childNode = dag.getNode(childId);
+          const isClosed = !childNode || childNode.issue.state === 'CLOSED';
+          const isLast = idx === visibleChildNumbers.length - 1;
+          items.push({
+            type: 'child',
+            number: childId,
+            title: childNode?.issue.title || `Issue #${childId}`,
+            status: isClosed ? 'completed' : childNode?.status || 'pending',
+            state: childNode?.issue.state || (isClosed ? 'CLOSED' : 'OPEN'),
+            isClosed,
+            parentSpecNumber: specNode.issue.number,
+            isLast,
+            worker: workersMap.get(childId),
+            blockers: childNode?.blockers,
+            labels: childNode?.issue.labels?.map((l) => l.name),
+            issue: childNode?.issue,
+          });
+        });
+      } else {
+        for (const childId of childNumbers) {
+          childAssignedNumbers.add(childId);
+        }
+      }
+    }
+
+    // 2. Standalone Open Issues (not specs, not children of any open spec)
+    const specNumbers = new Set(allNodes.filter((n) => n.kind === 'spec').map((n) => n.issue.number));
+    const standaloneNodes = allNodes.filter(
+      (n) =>
+        n.issue.state === 'OPEN' &&
+        !specNumbers.has(n.issue.number) &&
+        !childAssignedNumbers.has(n.issue.number) &&
+        n.parentNumber === undefined
+    );
+
+    for (const node of standaloneNodes) {
+      items.push({
+        type: 'standalone',
+        number: node.issue.number,
+        title: node.issue.title,
+        status: node.status,
+        worker: workersMap.get(node.issue.number),
+        blockers: node.blockers,
+        labels: node.issue.labels?.map((l) => l.name),
+        issue: node.issue,
+      });
+    }
+
+    return {
+      items,
+      totalSpecsCount: openSpecNodes.length,
+      totalStandaloneCount: standaloneNodes.length,
+    };
+  };
+
   // Listen to orchestrator ticks and 1-second refresh timer
   useEffect(() => {
     const unsubscribe = orchestrator.onTick(() => {
@@ -269,6 +375,23 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
 
     if (cmd === '/close' || cmd === '/quit' || cmd === '/exit' || cmd === 'close' || cmd === 'quit' || cmd === 'exit') {
       handleQuit();
+      return;
+    }
+
+    if (
+      cmd === '/browse-issues' ||
+      cmd === 'browse-issues' ||
+      cmd === '/browse' ||
+      cmd === 'browse' ||
+      cmd === '/issues' ||
+      cmd === 'issues' ||
+      cmd === '/tree' ||
+      cmd === 'tree'
+    ) {
+      setBrowserIndex(0);
+      setBrowserConfirmAction(null);
+      setBrowserStatusMessage(undefined);
+      setView('issue_browser');
       return;
     }
 
@@ -483,6 +606,7 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
         type: 'info',
         title: 'ℹ️ Available Commands & Keyboard Shortcuts',
         lines: [
+          '/browse-issues  - Interactive tree browser for open specs, child tasks, and standalone issues',
           '/specs          - Change target specs scope or select Any unblocked task',
           '/providers      - Toggle allowed LLM providers/runners for this repository',
           '/logs           - Open dedicated system and daemon activity logs window',
@@ -1106,8 +1230,229 @@ export const App: React.FC<AppProps> = ({ orchestrator, onExit }) => {
         handleQuit();
         return;
       }
+    } else if (view === 'issue_browser') {
+      const { items } = buildTreeItems(expandedSpecs, showOnlyOpen);
+      const currentItem = items[browserIndex];
+
+      if (browserConfirmAction && browserConfirmAction.type === 'kill') {
+        if (input === 'y' || input === 'Y') {
+          const issueNum = browserConfirmAction.issueNumber;
+          setBrowserConfirmAction(null);
+          setBrowserStatusMessage(`⏳ Killing worker and wiping worktree for #${issueNum}...`);
+          orchestrator.killAndWipeWorker(issueNum).then((res) => {
+            setBrowserStatusMessage(`✓ ${res.message}`);
+            setTimeout(() => setBrowserStatusMessage(undefined), 5000);
+          });
+          return;
+        }
+
+        if (input === 'n' || input === 'N' || key.escape) {
+          setBrowserConfirmAction(null);
+          setBrowserStatusMessage('Kill action cancelled.');
+          setTimeout(() => setBrowserStatusMessage(undefined), 2000);
+          return;
+        }
+        return;
+      }
+
+      if (browserConfirmAction && browserConfirmAction.type === 'enqueue') {
+        if (input === 'y' || input === 'Y') {
+          const issueNum = browserConfirmAction.issueNumber;
+          setBrowserConfirmAction(null);
+          setBrowserStatusMessage(`⏳ Enqueuing Issue #${issueNum}...`);
+          orchestrator.enqueueTask(issueNum, { force: true }).then((res) => {
+            setBrowserStatusMessage(res.success ? `✓ ${res.message}` : `❌ ${res.message}`);
+            setTimeout(() => setBrowserStatusMessage(undefined), 5000);
+          });
+          return;
+        }
+
+        if (input === 'n' || input === 'N' || key.escape) {
+          setBrowserConfirmAction(null);
+          setBrowserStatusMessage('Enqueue action cancelled.');
+          setTimeout(() => setBrowserStatusMessage(undefined), 2000);
+          return;
+        }
+        return;
+      }
+
+      if (key.escape) {
+        setView('dashboard');
+        setBrowserStatusMessage(undefined);
+        setBrowserConfirmAction(null);
+        return;
+      }
+
+      if (key.upArrow || input === 'k') {
+        setBrowserIndex((prev) => Math.max(0, prev - 1));
+        return;
+      }
+
+      if (key.downArrow || input === 'j') {
+        setBrowserIndex((prev) => Math.min(Math.max(0, items.length - 1), prev + 1));
+        return;
+      }
+
+      // Expand / Collapse current spec & Left arrow on child to collapse parent and move cursor
+      if (input === ' ' || key.rightArrow || key.leftArrow || input === 'h' || input === 'l') {
+        const isLeft = key.leftArrow || input === 'h';
+        const isRight = key.rightArrow || input === 'l';
+
+        if (currentItem && currentItem.type === 'child' && isLeft) {
+          const parentSpecNum = currentItem.parentSpecNumber;
+          const parentIndex = items.findIndex((it) => it.type === 'spec' && it.number === parentSpecNum);
+          setExpandedSpecs((prev) => {
+            const next = new Set(prev);
+            next.delete(parentSpecNum);
+            return next;
+          });
+          if (parentIndex !== -1) {
+            setBrowserIndex(parentIndex);
+          }
+          return;
+        }
+
+        if (currentItem && currentItem.type === 'spec') {
+          setExpandedSpecs((prev) => {
+            const next = new Set(prev);
+            if (isLeft) {
+              next.delete(currentItem.number);
+            } else if (isRight) {
+              next.add(currentItem.number);
+            } else if (next.has(currentItem.number)) {
+              next.delete(currentItem.number);
+            } else {
+              next.add(currentItem.number);
+            }
+            return next;
+          });
+        }
+        return;
+      }
+
+      // Expand all / collapse all specs toggle
+      if (input === 'a') {
+        if (dag) {
+          const openSpecs = dag.getAllNodes().filter((n) => n.kind === 'spec' && n.issue.state === 'OPEN');
+          if (expandedSpecs.size >= openSpecs.length && openSpecs.length > 0) {
+            setExpandedSpecs(new Set());
+            setBrowserStatusMessage('Collapsed all specifications.');
+          } else {
+            setExpandedSpecs(new Set(openSpecs.map((s) => s.issue.number)));
+            setBrowserStatusMessage(`Expanded all ${openSpecs.length} specifications.`);
+          }
+          setTimeout(() => setBrowserStatusMessage(undefined), 2500);
+        }
+        return;
+      }
+
+      // Toggle show only open vs show all child tasks
+      if (input === 'c' || input === 'C') {
+        setShowOnlyOpen((prev) => {
+          const next = !prev;
+          setBrowserStatusMessage(next ? 'Filter: Showing only open child tasks.' : 'Filter: Showing all child tasks (including completed).');
+          setTimeout(() => setBrowserStatusMessage(undefined), 3000);
+          return next;
+        });
+        return;
+      }
+
+      // Enqueue
+      if (input === 'e') {
+        if (currentItem) {
+          orchestrator.enqueueTask(currentItem.number, { force: false }).then((res) => {
+            if (res.requiresConfirmation) {
+              setBrowserConfirmAction({
+                type: 'enqueue',
+                issueNumber: currentItem.number,
+                message: res.message,
+              });
+            } else {
+              setBrowserStatusMessage(res.success ? `✓ ${res.message}` : `❌ ${res.message}`);
+              setTimeout(() => setBrowserStatusMessage(undefined), 5000);
+            }
+          }).catch((err) => {
+            setBrowserStatusMessage(`❌ ${err?.message || 'Failed to enqueue task'}`);
+            setTimeout(() => setBrowserStatusMessage(undefined), 5000);
+          });
+        }
+        return;
+      }
+
+      // Open in browser
+      if (input === 'o') {
+        if (currentItem) {
+          orchestrator.openIssueInBrowser(currentItem.number).then((res) => {
+            setBrowserStatusMessage(res.message);
+            setTimeout(() => setBrowserStatusMessage(undefined), 4000);
+          });
+        }
+        return;
+      }
+
+      // Pause / Resume
+      if (input === 'p') {
+        if (currentItem && currentItem.worker) {
+          if (currentItem.worker.status === 'paused_quota') {
+            orchestrator.resumeWorker(currentItem.number).then((res) => {
+              setBrowserStatusMessage(`✓ ${res.message}`);
+              setTimeout(() => setBrowserStatusMessage(undefined), 4000);
+            });
+          } else {
+            orchestrator.pauseWorker(currentItem.number).then((res) => {
+              setBrowserStatusMessage(`⏸️ ${res.message}`);
+              setTimeout(() => setBrowserStatusMessage(undefined), 4000);
+            });
+          }
+        } else {
+          setBrowserStatusMessage(`ℹ️ Issue #${currentItem?.number} has no active worker to pause/resume.`);
+          setTimeout(() => setBrowserStatusMessage(undefined), 3000);
+        }
+        return;
+      }
+
+      // Kill worker & wipe worktree
+      if (input === 'k' && !key.upArrow) {
+        if (currentItem) {
+          setBrowserConfirmAction({ type: 'kill', issueNumber: currentItem.number });
+        }
+        return;
+      }
+
+      // Inspect / Live tail
+      if (key.return || input === 'i') {
+        if (currentItem) {
+          setInspectIssueNumber(currentItem.number);
+          loadHistoricalEvents(currentItem.number);
+          setView('inspect');
+          setInputText('');
+          setStatusMessage(undefined);
+        }
+        return;
+      }
+
+      if (input === 'q' || (key.ctrl && input === 'c')) {
+        handleQuit();
+        return;
+      }
     }
   });
+
+  if (view === 'issue_browser') {
+    const { items, totalSpecsCount, totalStandaloneCount } = buildTreeItems(expandedSpecs, showOnlyOpen);
+    return (
+      <IssueBrowserView
+        items={items}
+        selectedIndex={browserIndex}
+        confirmAction={browserConfirmAction}
+        statusMessage={browserStatusMessage}
+        repository={config.repository}
+        totalSpecsCount={totalSpecsCount}
+        totalStandaloneCount={totalStandaloneCount}
+        showOnlyOpen={showOnlyOpen}
+      />
+    );
+  }
 
   if (view === 'providers') {
     return (

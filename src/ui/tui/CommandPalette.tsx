@@ -9,6 +9,11 @@ export interface CommandDefinition {
 
 export const AVAILABLE_COMMANDS: CommandDefinition[] = [
   {
+    name: '/browse-issues',
+    description: 'Interactive tree browser for open specs, child tasks, and standalone issues',
+    aliases: ['browse-issues', '/browse', 'browse', '/issues', 'issues', '/tree', 'tree'],
+  },
+  {
     name: '/specs',
     description: 'Select target specs to scope execution or choose Any unblocked task',
     aliases: ['specs', '/start', 'start', '/scope', 'scope'],
@@ -187,7 +192,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           </Box>
         ) : (
           <Text color="cyan">
-            [↑/↓ or j/k] Navigate  •  [Enter] Inspect  •  [/] Command Palette (/usage, /close)  •  [q] Quit
+            [↑/↓ or j/k] Navigate  •  [Enter] Inspect  •  [/] Command Palette (/browse, /usage, /close)  •  [q] Quit
           </Text>
         )}
       </Box>

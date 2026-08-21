@@ -376,6 +376,7 @@ describe('TelegramRemoteProvider', () => {
         { command: 'start', description: 'Show command reference and status' },
         { command: 'status', description: 'View active tasks, worktrees & DAG' },
         { command: 'tasks', description: 'List in-progress and queued tasks' },
+        { command: 'browse', description: 'Interactive issue tree & spec browser' },
         { command: 'steer', description: 'Steer a running session with instructions' },
         { command: 'enqueue', description: 'Enqueue an issue into priority queue' },
         { command: 'run', description: 'Run/enqueue an issue immediately' },

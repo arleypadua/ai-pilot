@@ -25,6 +25,10 @@ import type {
   TasksSummary,
   SpecsSummary,
   TaskItemSummary,
+  IssueTreeSummary,
+  SpecTreeSummary,
+  ChildTicketSummary,
+  StandaloneIssueSummary,
 } from "../remote/types.js";
 
 export class Orchestrator implements RemoteActionController {
@@ -1677,6 +1681,99 @@ ${autoMergeStep}
     return {
       targetSpecs: this.dag.getTargetSpecs(),
       specs,
+    };
+  }
+
+  public getIssueTreeSummary(): IssueTreeSummary {
+    const allNodes = this.dag.getAllNodes();
+    const activeWorkers = this.dashboard.getActiveWorkers();
+
+    const getWorkerInfo = (issueNumber: number) => {
+      const w = activeWorkers.get(issueNumber);
+      if (w) {
+        return {
+          branchName: w.branchName,
+          status: w.status,
+          runnerName: w.runnerName,
+        };
+      }
+      return undefined;
+    };
+
+    // 1. Open Specifications
+    const openSpecNodes = allNodes.filter(
+      (n) => n.kind === "spec" && n.issue.state === "OPEN",
+    );
+
+    const childAssignedNumbers = new Set<number>();
+    const specs: SpecTreeSummary[] = openSpecNodes.map((specNode) => {
+      const comp = this.dag.isSpecComplete(specNode.issue.number);
+      const childNumbers = this.dag.getSpecChildIssueNumbers(specNode.issue.number);
+
+      const children: ChildTicketSummary[] = childNumbers.map((childId) => {
+        childAssignedNumbers.add(childId);
+        const childNode = this.dag.getNode(childId);
+        const childWorker = getWorkerInfo(childId);
+        const isClosed = !childNode || childNode.issue.state === "CLOSED";
+        return {
+          number: childId,
+          title: childNode?.issue.title || `Issue #${childId}`,
+          status: isClosed ? "completed" : childNode?.status || "pending",
+          state: childNode?.issue.state || (isClosed ? "CLOSED" : "OPEN"),
+          isClosed,
+          worker: childWorker,
+          blockers: childNode?.blockers,
+        };
+      });
+
+      return {
+        number: specNode.issue.number,
+        title: specNode.issue.title,
+        isComplete: comp.isComplete,
+        totalTickets: comp.totalTickets,
+        completedTickets: comp.completedTickets,
+        state: specNode.issue.state,
+        status: specNode.status,
+        children,
+        worker: getWorkerInfo(specNode.issue.number),
+        blockers: specNode.blockers,
+      };
+    });
+
+    // 2. Standalone Open Issues (not specs, not children of any open spec)
+    const specNumbers = new Set(
+      allNodes.filter((n) => n.kind === "spec").map((n) => n.issue.number),
+    );
+    const standaloneNodes = allNodes.filter(
+      (n) =>
+        n.issue.state === "OPEN" &&
+        !specNumbers.has(n.issue.number) &&
+        !childAssignedNumbers.has(n.issue.number) &&
+        n.parentNumber === undefined,
+    );
+
+    const standaloneIssues: StandaloneIssueSummary[] = standaloneNodes.map((n) => ({
+      number: n.issue.number,
+      title: n.issue.title,
+      status: n.status,
+      state: n.issue.state,
+      labels: n.issue.labels?.map((l) => l.name),
+      worker: getWorkerInfo(n.issue.number),
+      blockers: n.blockers,
+    }));
+
+    const readyIssueNumbers = this.dag.getReadyNodes().map((n) => n.issue.number);
+
+    return {
+      specs,
+      standaloneIssues,
+      totalOpenSpecs: specs.length,
+      totalOpenIssues:
+        specs.reduce(
+          (acc, s) => acc + s.children.filter((c) => !c.isClosed).length,
+          0,
+        ) + standaloneIssues.length,
+      readyIssueNumbers,
     };
   }
 

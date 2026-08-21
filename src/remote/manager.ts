@@ -57,6 +57,9 @@ import {
   formatEnqueueUsage,
   formatPauseUsage,
   formatResumeUsage,
+  formatBrowse,
+  formatBrowseSpecDetail,
+  parseBrowseActionPayload,
 } from './formatters.js';
 import type { QuotaMonitor } from '../quota/monitor.js';
 
@@ -186,6 +189,11 @@ export class RemoteControlManager {
       await this.handleEnqueueAction(payload, userId, context);
     });
 
+    // Register browse tree action handler with provider (spec drill-down, toggle, enqueue all)
+    this.provider.onAction('v1:b', async (_action, payload, userId, context) => {
+      await this.handleBrowseAction(payload, userId, context);
+    });
+
     if (this.provider.onTextReply) {
       this.provider.onTextReply(async (replyToMessageId, text, userId) => {
         await this.handleTextReply(replyToMessageId, text, userId);
@@ -201,6 +209,18 @@ export class RemoteControlManager {
       });
       this.provider.onCommand('tasks', async (args, userId, context) => {
         await this.handleTasksCommand(args, userId, context);
+      });
+      this.provider.onCommand('browse', async (args, userId, context) => {
+        await this.handleBrowseCommand(args, userId, context);
+      });
+      this.provider.onCommand('browse-issues', async (args, userId, context) => {
+        await this.handleBrowseCommand(args, userId, context);
+      });
+      this.provider.onCommand('issues', async (args, userId, context) => {
+        await this.handleBrowseCommand(args, userId, context);
+      });
+      this.provider.onCommand('tree', async (args, userId, context) => {
+        await this.handleBrowseCommand(args, userId, context);
       });
       this.provider.onCommand('steer', async (args, userId, context) => {
         await this.handleSteerCommand(args, userId, context);
@@ -703,6 +723,20 @@ export class RemoteControlManager {
     }
 
     const { text, actions } = formatTasks(this.repository, tasksData);
+    await this.provider.sendMessage(text, {
+      chatId: context?.chatId ?? this.defaultChatId,
+      parseMode: 'Markdown',
+      actions: actions.length > 0 ? actions : undefined,
+    });
+  }
+
+  public async handleBrowseCommand(
+    _args: string[],
+    _userId: number,
+    context?: ActionContext
+  ): Promise<void> {
+    const treeData = this.actionController?.getIssueTreeSummary ? this.actionController.getIssueTreeSummary() : undefined;
+    const { text, actions } = formatBrowse(this.repository, treeData);
     await this.provider.sendMessage(text, {
       chatId: context?.chatId ?? this.defaultChatId,
       parseMode: 'Markdown',
@@ -1298,6 +1332,113 @@ export class RemoteControlManager {
       }
 
       return true;
+    }
+
+    return false;
+  }
+
+  public async handleBrowseAction(
+    payload: string,
+    _userId: number,
+    context?: ActionContext
+  ): Promise<boolean> {
+    const parsed = parseBrowseActionPayload(payload);
+    if (!parsed) return false;
+
+    const treeData = this.actionController?.getIssueTreeSummary ? this.actionController.getIssueTreeSummary() : undefined;
+
+    if (parsed.type === 'root') {
+      const { text, actions } = formatBrowse(this.repository, treeData, { showOnlyOpen: parsed.showOnlyOpen });
+      if (context?.messageId) {
+        try {
+          await this.provider.editMessage(context.messageId, text, {
+            chatId: context.chatId ?? this.defaultChatId,
+            parseMode: 'Markdown',
+            actions: actions.length > 0 ? actions : [],
+          });
+        } catch (err: any) {
+          ActivityLogger.error('RemoteControlManager: failed to edit browse root message inline:', err);
+        }
+      } else {
+        await this.provider.sendMessage(text, {
+          chatId: context?.chatId ?? this.defaultChatId,
+          parseMode: 'Markdown',
+          actions: actions.length > 0 ? actions : undefined,
+        });
+      }
+      return true;
+    }
+
+    if (parsed.type === 'toggle') {
+      const nextShowOnlyOpen = !parsed.showOnlyOpen;
+      const { text, actions } = formatBrowse(this.repository, treeData, { showOnlyOpen: nextShowOnlyOpen });
+      if (context?.messageId) {
+        try {
+          await this.provider.editMessage(context.messageId, text, {
+            chatId: context.chatId ?? this.defaultChatId,
+            parseMode: 'Markdown',
+            actions: actions.length > 0 ? actions : [],
+          });
+        } catch (err: any) {
+          ActivityLogger.error('RemoteControlManager: failed to edit browse toggle message inline:', err);
+        }
+      } else {
+        await this.provider.sendMessage(text, {
+          chatId: context?.chatId ?? this.defaultChatId,
+          parseMode: 'Markdown',
+          actions: actions.length > 0 ? actions : undefined,
+        });
+      }
+      return true;
+    }
+
+    if (parsed.type === 'spec') {
+      const spec = treeData?.specs.find((s) => s.number === parsed.specNumber);
+      if (spec) {
+        const { text, actions } = formatBrowseSpecDetail(this.repository, spec, { showOnlyOpen: parsed.showOnlyOpen });
+        if (context?.messageId) {
+          try {
+            await this.provider.editMessage(context.messageId, text, {
+              chatId: context.chatId ?? this.defaultChatId,
+              parseMode: 'Markdown',
+              actions: actions.length > 0 ? actions : [],
+            });
+          } catch (err: any) {
+            ActivityLogger.error('RemoteControlManager: failed to edit browse spec message inline:', err);
+          }
+        } else {
+          await this.provider.sendMessage(text, {
+            chatId: context?.chatId ?? this.defaultChatId,
+            parseMode: 'Markdown',
+            actions: actions.length > 0 ? actions : undefined,
+          });
+        }
+        return true;
+      }
+    }
+
+    if (parsed.type === 'enqueueAll') {
+      if (this.actionController?.enqueueTask) {
+        await this.actionController.enqueueTask(parsed.specNumber, { force: true });
+      }
+      const updatedTreeData = this.actionController?.getIssueTreeSummary ? this.actionController.getIssueTreeSummary() : undefined;
+      const spec = updatedTreeData?.specs.find((s) => s.number === parsed.specNumber);
+      if (spec) {
+        const { text, actions } = formatBrowseSpecDetail(this.repository, spec, { showOnlyOpen: false });
+        const banner = `⚡ *Enqueued open child tasks for Spec #${parsed.specNumber}*\n\n`;
+        if (context?.messageId) {
+          try {
+            await this.provider.editMessage(context.messageId, banner + text, {
+              chatId: context.chatId ?? this.defaultChatId,
+              parseMode: 'Markdown',
+              actions: actions.length > 0 ? actions : [],
+            });
+          } catch (err: any) {
+            ActivityLogger.error('RemoteControlManager: failed to edit browse enqueue-all message inline:', err);
+          }
+        }
+        return true;
+      }
     }
 
     return false;

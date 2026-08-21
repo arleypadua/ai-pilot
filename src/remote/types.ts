@@ -105,6 +105,59 @@ export interface StatusSummary {
   allSpecs?: SpecItemSummary[];
 }
 
+export interface ChildTicketSummary {
+  number: number;
+  title: string;
+  status: string;
+  state?: string;
+  isClosed?: boolean;
+  worker?: {
+    branchName: string;
+    status: string;
+    runnerName?: string;
+  };
+  blockers?: number[];
+}
+
+export interface SpecTreeSummary {
+  number: number;
+  title: string;
+  isComplete: boolean;
+  totalTickets: number;
+  completedTickets: number;
+  state?: string;
+  status: string;
+  children: ChildTicketSummary[];
+  worker?: {
+    branchName: string;
+    status: string;
+    runnerName?: string;
+  };
+  blockers?: number[];
+}
+
+export interface StandaloneIssueSummary {
+  number: number;
+  title: string;
+  status: string;
+  state?: string;
+  labels?: string[];
+  worker?: {
+    branchName: string;
+    status: string;
+    runnerName?: string;
+  };
+  blockers?: number[];
+}
+
+export interface IssueTreeSummary {
+  specs: SpecTreeSummary[];
+  standaloneIssues: StandaloneIssueSummary[];
+  totalOpenSpecs: number;
+  totalOpenIssues: number;
+  readyIssueNumbers: number[];
+}
+
 export interface RemoteActionController {
   replyToNeedsInfo(issueNumber: number, answer: string): Promise<void>;
   resumeQuota(runner?: string): void;
@@ -116,6 +169,7 @@ export interface RemoteActionController {
   getStatusSummary(): unknown;
   getTasksSummary?(): TasksSummary;
   getSpecsSummary?(): SpecsSummary;
+  getIssueTreeSummary?(): IssueTreeSummary;
   cleanWorktrees?(): Promise<{ success: boolean; message: string; count?: number }>;
   getInspectSummary?(issueNumber?: number): Promise<string>;
   getLogsSummary?(issueNumber: number, tailLines?: number): Promise<string>;

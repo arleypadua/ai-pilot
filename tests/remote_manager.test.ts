@@ -228,6 +228,55 @@ class MockActionController implements RemoteActionController {
     };
   }
 
+  public getIssueTreeSummary(): any {
+    return {
+      specs: [
+        {
+          number: 22,
+          title: 'Epic: Remote Control',
+          isComplete: false,
+          totalTickets: 3,
+          completedTickets: 1,
+          status: 'pending',
+          children: [
+            {
+              number: 24,
+              title: 'feat: notifications',
+              status: 'ready',
+              state: 'OPEN',
+              isClosed: false,
+            },
+            {
+              number: 25,
+              title: 'feat: quota alert',
+              status: 'ready',
+              state: 'OPEN',
+              isClosed: false,
+            },
+            {
+              number: 23,
+              title: 'feat: initial setup',
+              status: 'completed',
+              state: 'CLOSED',
+              isClosed: true,
+            },
+          ],
+        },
+      ],
+      standaloneIssues: [
+        {
+          number: 30,
+          title: 'bug: fix edge case',
+          status: 'ready',
+          state: 'OPEN',
+        },
+      ],
+      totalOpenSpecs: 1,
+      totalOpenIssues: 3,
+      readyIssueNumbers: [24, 25, 30],
+    };
+  }
+
   public async cleanWorktrees(): Promise<{ success: boolean; message: string; count: number }> {
     return { success: true, message: 'Cleaned up 2 inactive worktrees.', count: 2 };
   }
@@ -891,6 +940,71 @@ describe('RemoteControlManager', () => {
       expect(msg.text).toContain('`/logs 24`');
       expect(msg.text).toContain('`/logs 25`');
       expect(msg.text).toContain('`/logs 26`');
+    });
+
+    it('/browse command returns full issue hierarchy tree with interactive navigation buttons', async () => {
+      await provider.triggerCommand('browse', [], 123456);
+
+      expect(provider.sentMessages.length).toBe(1);
+      const msg = provider.sentMessages[0];
+      expect(msg.text).toContain('[arleypadua/imagos] 🌳 *Issue Tree Browser*');
+      expect(msg.text).toContain('📁 *Specifications* (1):');
+      expect(msg.text).toContain('*#22* - *Epic: Remote Control* _(1/3 complete)_');
+      expect(msg.text).toContain('📄 *Standalone Issues* (1):');
+      expect(msg.text).toContain('• 🟢 *#30* - bug: fix edge case');
+
+      const actions = msg.options?.actions;
+      expect(actions).toBeDefined();
+      expect(actions!.some((row) => row.some((b) => b.label.includes('#22') && b.payload.startsWith('v1:b:s:22')))).toBe(true);
+      expect(actions!.some((row) => row.some((b) => b.label.includes('Filter: Open Only')))).toBe(true);
+      expect(actions!.some((row) => row.some((b) => b.label.includes('#30') && b.payload.startsWith('v1:enq:30')))).toBe(true);
+      expect(actions!.some((row) => row.some((b) => b.label.includes('GitHub Backlog')))).toBe(true);
+    });
+
+    it('handles interactive browse actions: drill-down into spec, toggle filter, and back to tree', async () => {
+      // 1. Initial /browse command
+      await provider.triggerCommand('browse', [], 123456);
+      expect(provider.sentMessages.length).toBe(1);
+      const initialMessageId = 1;
+
+      // 2. Tap on Spec #22 drill-down button
+      await provider.triggerAction('v1:b:s:22:0', 123456, {
+        messageId: initialMessageId,
+        chatId: 123456,
+      });
+
+      expect(provider.editedMessages.length).toBe(1);
+      const specMsg = provider.editedMessages[0];
+      expect(specMsg.messageId).toBe(initialMessageId);
+      expect(specMsg.text).toContain('Spec #22: Epic: Remote Control');
+      expect(specMsg.text).toContain('├── 🟢 *#24* - feat: notifications');
+      expect(specMsg.text).toContain('├── 🟢 *#25* - feat: quota alert');
+      expect(specMsg.text).toContain('└── ✔️ *#23* - feat: initial setup _(closed)_');
+      expect(specMsg.options?.actions?.some((row) => row.some((b) => b.label.includes('Back to Tree')))).toBe(true);
+      expect(specMsg.options?.actions?.some((row) => row.some((b) => b.label.includes('Enqueue All 2 Open Tasks')))).toBe(true);
+
+      // 3. Tap "Back to Tree" button
+      await provider.triggerAction('v1:b:r:0', 123456, {
+        messageId: initialMessageId,
+        chatId: 123456,
+      });
+
+      expect(provider.editedMessages.length).toBe(2);
+      const rootMsg = provider.editedMessages[1];
+      expect(rootMsg.messageId).toBe(initialMessageId);
+      expect(rootMsg.text).toContain('🌳 *Issue Tree Browser*');
+
+      // 4. Tap Filter Toggle button
+      await provider.triggerAction('v1:b:t:0', 123456, {
+        messageId: initialMessageId,
+        chatId: 123456,
+      });
+
+      expect(provider.editedMessages.length).toBe(3);
+      const toggledMsg = provider.editedMessages[2];
+      expect(toggledMsg.messageId).toBe(initialMessageId);
+      expect(toggledMsg.text).toContain('Showing Open Only');
+      expect(toggledMsg.options?.actions?.some((row) => row.some((b) => b.label.includes('Show All Tasks')))).toBe(true);
     });
   });
 });

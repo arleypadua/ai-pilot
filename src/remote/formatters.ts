@@ -10,6 +10,8 @@ import type {
   SpecsSummary,
   SecurityStatusInfo,
   InteractiveAction,
+  IssueTreeSummary,
+  SpecTreeSummary,
 } from './types.js';
 
 /**
@@ -504,6 +506,7 @@ export function formatHelp(
     '*Available Slash Commands*:',
     '• `/status` - View daemon health, active workers, git branches, and target specs',
     '• `/tasks` - View in-progress, paused, and queued tasks with pause/resume controls',
+    '• `/browse` - Browse full issue hierarchy, specs, subtasks, and standalone issues',
     '• `/steer <issue> <prompt>` - Steer a running worker and receive a live tail impact report',
     '• `/enqueue <issue> [--force]` - Enqueue an issue to priority queue (aliases: `/run`)',
     '• `/pause [issue]` - Pause global task dispatching or pause a specific worker',
@@ -1063,3 +1066,297 @@ export function formatSteeringLiveTailReport(
 
   return lines.join('\n');
 }
+
+export type BrowseAction =
+  | { type: 'root'; showOnlyOpen: boolean }
+  | { type: 'spec'; specNumber: number; showOnlyOpen: boolean }
+  | { type: 'toggle'; showOnlyOpen: boolean }
+  | { type: 'enqueueAll'; specNumber: number };
+
+export function buildBrowseRootCallbackData(showOnlyOpen: boolean): string {
+  return `v1:b:r:${showOnlyOpen ? '1' : '0'}`;
+}
+
+export function buildBrowseSpecCallbackData(specNumber: number, showOnlyOpen: boolean): string {
+  return `v1:b:s:${specNumber}:${showOnlyOpen ? '1' : '0'}`;
+}
+
+export function buildBrowseToggleCallbackData(currentShowOnlyOpen: boolean): string {
+  return `v1:b:t:${currentShowOnlyOpen ? '1' : '0'}`;
+}
+
+export function buildBrowseEnqueueAllCallbackData(specNumber: number): string {
+  return `v1:b:ea:${specNumber}`;
+}
+
+export function parseBrowseActionPayload(payload: string): BrowseAction | null {
+  if (!payload || typeof payload !== 'string' || !payload.startsWith('v1:b:')) {
+    return null;
+  }
+  const parts = payload.split(':');
+  const actionType = parts[2];
+
+  if (actionType === 'r') {
+    return { type: 'root', showOnlyOpen: parts[3] === '1' };
+  }
+  if (actionType === 's') {
+    const specNum = parseInt(parts[3], 10);
+    if (!isNaN(specNum)) {
+      return { type: 'spec', specNumber: specNum, showOnlyOpen: parts[4] === '1' };
+    }
+  }
+  if (actionType === 't') {
+    return { type: 'toggle', showOnlyOpen: parts[3] === '1' };
+  }
+  if (actionType === 'ea') {
+    const specNum = parseInt(parts[3], 10);
+    if (!isNaN(specNum)) {
+      return { type: 'enqueueAll', specNumber: specNum };
+    }
+  }
+  return null;
+}
+
+/**
+ * Formats the root overview for the hierarchical issue browser in Telegram.
+ */
+export function formatBrowse(
+  repository: string | undefined,
+  data?: IssueTreeSummary,
+  options?: { showOnlyOpen?: boolean }
+): { text: string; actions: InteractiveAction[][] } {
+  const showOnlyOpen = options?.showOnlyOpen ?? false;
+  const repoTag = formatRepoTag(repository);
+  const lines: string[] = [
+    `${repoTag}🌳 *Issue Tree Browser*`,
+    `_Filter: ${showOnlyOpen ? 'Showing Open Only' : 'Showing All Tasks'}_`,
+    '',
+  ];
+
+  const actions: InteractiveAction[][] = [];
+
+  if (!data || (data.specs.length === 0 && data.standaloneIssues.length === 0)) {
+    lines.push('No open issues or specifications found in repository.');
+    if (repository) {
+      actions.push([
+        {
+          id: 'gh_browse',
+          label: '🔗 Open GitHub Backlog',
+          payload: '',
+          url: `https://github.com/${repository}/issues`,
+        },
+      ]);
+    }
+    return { text: lines.join('\n'), actions };
+  }
+
+  // 1. Specifications Overview
+  if (data.specs.length > 0) {
+    lines.push(`📁 *Specifications* (${data.specs.length}):`);
+    const specButtons: InteractiveAction[] = [];
+
+    for (const spec of data.specs) {
+      const isSpecComplete = spec.isComplete || (spec.totalTickets > 0 && spec.completedTickets === spec.totalTickets);
+      const specIcon = isSpecComplete ? '🏆' : spec.worker ? '⚡' : '📋';
+      const progressStr = spec.totalTickets > 0 ? ` _(${spec.completedTickets}/${spec.totalTickets} complete)_` : '';
+      lines.push(`• ${specIcon} *#${spec.number}* - *${escapeMarkdown(spec.title)}*${progressStr}`);
+
+      const cleanTitle = spec.title.length > 18 ? `${spec.title.slice(0, 15)}...` : spec.title;
+      specButtons.push({
+        id: `b_s_${spec.number}`,
+        label: `📁 #${spec.number} ${cleanTitle}`,
+        payload: buildBrowseSpecCallbackData(spec.number, showOnlyOpen),
+      });
+    }
+    lines.push('');
+
+    // Layout spec buttons in rows of 2
+    for (let i = 0; i < specButtons.length; i += 2) {
+      actions.push(specButtons.slice(i, i + 2));
+    }
+  }
+
+  // 2. Standalone issues
+  if (data.standaloneIssues.length > 0) {
+    lines.push(`📄 *Standalone Issues* (${data.standaloneIssues.length}):`);
+    for (const issue of data.standaloneIssues) {
+      let icon = '⚪';
+      if (issue.worker) {
+        icon = issue.worker.status === 'paused_quota' ? '⏳' : '⚡';
+      } else if (issue.status === 'ready') {
+        icon = '🟢';
+      } else if (issue.status === 'waiting_feedback') {
+        icon = '👤';
+      } else if (issue.status === 'blocked') {
+        icon = '🚫';
+      }
+
+      const statusSuffix = issue.worker
+        ? ` _(${issue.worker.status})_`
+        : issue.blockers && issue.blockers.length > 0
+        ? ` _(blocked by #${issue.blockers.join(', #')})_`
+        : '';
+
+      lines.push(`• ${icon} *#${issue.number}* - ${escapeMarkdown(issue.title)}${statusSuffix}`);
+    }
+    lines.push('');
+  }
+
+  // Row for Filter Toggle
+  actions.push([
+    {
+      id: 'b_toggle',
+      label: showOnlyOpen ? '👁️ Show All Tasks' : '🔍 Filter: Open Only',
+      payload: buildBrowseToggleCallbackData(showOnlyOpen),
+    },
+  ]);
+
+  // Quick enqueue buttons for standalone ready tasks
+  if (data.readyIssueNumbers && data.readyIssueNumbers.length > 0) {
+    const specChildNumbers = new Set(data.specs.flatMap((s) => s.children.map((c) => c.number)));
+    const standaloneReady = data.readyIssueNumbers.filter((n) => !specChildNumbers.has(n));
+    if (standaloneReady.length > 0) {
+      const enqueueButtons: InteractiveAction[] = [];
+      for (const num of standaloneReady.slice(0, 2)) {
+        enqueueButtons.push({
+          id: `enq_${num}`,
+          label: `⚡ Enqueue #${num}`,
+          payload: buildEnqueueCallbackData(num, 'f'),
+        });
+      }
+      if (enqueueButtons.length > 0) {
+        actions.push(enqueueButtons);
+      }
+    }
+  }
+
+  if (repository) {
+    actions.push([
+      {
+        id: 'gh_browse',
+        label: '🔗 Open GitHub Backlog',
+        payload: '',
+        url: `https://github.com/${repository}/issues`,
+      },
+    ]);
+  }
+
+  return { text: lines.join('\n').trim(), actions };
+}
+
+/**
+ * Formats the drill-down detail view for a specific specification in Telegram.
+ */
+export function formatBrowseSpecDetail(
+  repository: string | undefined,
+  spec: SpecTreeSummary,
+  options?: { showOnlyOpen?: boolean }
+): { text: string; actions: InteractiveAction[][] } {
+  const showOnlyOpen = options?.showOnlyOpen ?? false;
+  const repoTag = formatRepoTag(repository);
+  const isSpecComplete = spec.isComplete || (spec.totalTickets > 0 && spec.completedTickets === spec.totalTickets);
+  const specIcon = isSpecComplete ? '🏆' : spec.worker ? '⚡' : '📋';
+  const progressStr = spec.totalTickets > 0 ? ` (${spec.completedTickets}/${spec.totalTickets} completed)` : '';
+
+  const lines: string[] = [
+    `${repoTag}${specIcon} *Spec #${spec.number}: ${escapeMarkdown(spec.title)}*`,
+    `_Progress: ${spec.completedTickets} of ${spec.totalTickets} child tickets complete${progressStr}_`,
+    '',
+  ];
+
+  if (spec.blockers && spec.blockers.length > 0) {
+    lines.push(`• *Blockers*: #${spec.blockers.join(', #')}`);
+  }
+
+  if (spec.worker) {
+    lines.push(`• *Active Worktree*: \`${spec.worker.branchName}\` (${spec.worker.status})`);
+  }
+
+  lines.push('', '*Child Tasks*:');
+
+  const visibleChildren = showOnlyOpen
+    ? spec.children.filter((c) => !c.isClosed && c.state !== 'CLOSED')
+    : spec.children;
+
+  if (visibleChildren.length === 0) {
+    lines.push(showOnlyOpen ? '  _All child tasks are closed/completed._' : '  _No child tasks found for this spec._');
+  } else {
+    visibleChildren.forEach((child, idx) => {
+      const isLast = idx === visibleChildren.length - 1;
+      const connector = isLast ? '└── ' : '├── ';
+      let icon = '⚪';
+      if (child.isClosed || child.state === 'CLOSED' || child.status === 'completed') {
+        icon = '✔️';
+      } else if (child.worker) {
+        icon = child.worker.status === 'paused_quota' ? '⏳' : '⚡';
+      } else if (child.status === 'ready') {
+        icon = '🟢';
+      } else if (child.status === 'waiting_feedback') {
+        icon = '👤';
+      } else if (child.status === 'blocked') {
+        icon = '🚫';
+      }
+
+      const statusSuffix = child.isClosed || child.state === 'CLOSED'
+        ? ' _(closed)_'
+        : child.worker
+        ? ` _(${child.worker.status})_`
+        : child.blockers && child.blockers.length > 0
+        ? ` _(blocked by #${child.blockers.join(', #')})_`
+        : '';
+
+      lines.push(`  ${connector}${icon} *#${child.number}* - ${escapeMarkdown(child.title)}${statusSuffix}`);
+    });
+  }
+
+  const actions: InteractiveAction[][] = [];
+
+  // 1. Ready child task buttons
+  const readyChildren = spec.children.filter((c) => !c.isClosed && c.state !== 'CLOSED' && c.status === 'ready');
+  if (readyChildren.length > 0) {
+    const enqueueRow: InteractiveAction[] = [];
+    for (const child of readyChildren.slice(0, 2)) {
+      enqueueRow.push({
+        id: `enq_${child.number}`,
+        label: `⚡ Enqueue #${child.number}`,
+        payload: buildEnqueueCallbackData(child.number, 'f'),
+      });
+    }
+    actions.push(enqueueRow);
+  }
+
+  // 2. Bulk Enqueue All Children (if multiple open children)
+  const openChildren = spec.children.filter((c) => !c.isClosed && c.state !== 'CLOSED');
+  if (openChildren.length > 1) {
+    actions.push([
+      {
+        id: `enq_all_${spec.number}`,
+        label: `⚡ Enqueue All ${openChildren.length} Open Tasks`,
+        payload: buildBrowseEnqueueAllCallbackData(spec.number),
+      },
+    ]);
+  }
+
+  // 3. Navigation row: Back & GitHub
+  const navRow: InteractiveAction[] = [
+    {
+      id: `b_back`,
+      label: '⬅️ Back to Tree',
+      payload: buildBrowseRootCallbackData(showOnlyOpen),
+    },
+  ];
+
+  if (repository) {
+    navRow.push({
+      id: `gh_spec_${spec.number}`,
+      label: '🔗 View on GitHub',
+      payload: '',
+      url: `https://github.com/${repository}/issues/${spec.number}`,
+    });
+  }
+
+  actions.push(navRow);
+
+  return { text: lines.join('\n').trim(), actions };
+}
+
